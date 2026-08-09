@@ -209,6 +209,7 @@ def get_document_chunks(document_id: UUID, db: Session = Depends(get_db)):
                 "page_end": chunk.page_end,
                 "timestamp_start": chunk.timestamp_start,
                 "timestamp_end": chunk.timestamp_end,
+                "source_locators": chunk.source_locators,
             }
             for chunk in chunks
         ],

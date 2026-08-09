@@ -11,7 +11,7 @@ type Doc={id:string,material_no?:string,candidate_id:string,employee_name:string
 type Job={id:string,parser_name:string,parser_version?:string,status:string,progress:number,error_message?:string,created_at:string}
 type Artifact={id:string,type:string,url:string,content?:string}
 type Detail=Doc&{employee?:{id:string,employee_no:string,name:string},knowledge_base?:{id:string,name:string},permission_scope:string,updated_at:string,version?:{version_no:number,created_at:string},file?:{name:string,mime_type:string,size_bytes:number,bucket_name:string,object_key:string,preview_url:string},jobs:Job[],artifacts:Artifact[]}
-type Chunk={id:string,stable_key:string,position:number,level:'parent'|'child',content:string,element_ids:string[],heading_path:string[],parent_chunk_id?:string,page_start?:number,page_end?:number,timestamp_start?:number,timestamp_end?:number}
+type Chunk={id:string,stable_key:string,position:number,level:'parent'|'child',content:string,element_ids:string[],heading_path:string[],parent_chunk_id?:string,page_start?:number,page_end?:number,timestamp_start?:number,timestamp_end?:number,source_locators:Record<string,unknown>[]}
 type ChunkData={run?:{id:string,strategy:string,status:string,chunk_size:number,chunk_overlap:number,embedding_model?:string,chunker_version:string},chunks:Chunk[]}
 type ChunkEvaluation={coverage:number,duplicate_rate:number,boundary_precision:number,boundary_recall:number,boundary_f1:number,evidence_completeness_rate:number,average_dispersion:number,complete_questions:number,fragmented_questions:number,missing_questions:number}
 

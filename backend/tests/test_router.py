@@ -11,7 +11,7 @@ from app.router import ParserKind, choose_parser
         ("candidate.html", ParserKind.LANGCHAIN),
         ("interview.docx", ParserKind.LANGCHAIN),
         ("performance.xlsx", ParserKind.NATIVE),
-        ("resume.pdf", ParserKind.NATIVE),
+        ("resume.pdf", ParserKind.MINERU),
         ("review.pptx", ParserKind.NATIVE),
         ("certificate.png", ParserKind.MINERU),
         ("interview.mp3", ParserKind.AUDIO),

@@ -19,7 +19,7 @@ PARSER_BY_SUFFIX = {
     ".markdown": ParserKind.NATIVE,
     ".xlsx": ParserKind.NATIVE,
     ".pptx": ParserKind.NATIVE,
-    ".pdf": ParserKind.NATIVE,
+    ".pdf": ParserKind.MINERU,
     ".png": ParserKind.MINERU,
     ".jpg": ParserKind.MINERU,
     ".jpeg": ParserKind.MINERU,

@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     page_end INTEGER,
     timestamp_start DOUBLE PRECISION,
     timestamp_end DOUBLE PRECISION,
+    source_locators JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (chunking_run_id, stable_key)
 );

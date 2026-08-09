@@ -76,6 +76,25 @@ def test_long_markdown_section_keeps_heading_path_after_recursive_split():
     assert all(chunk.heading_path == ["项目经历"] for chunk in chunks)
 
 
+def test_long_markdown_element_refines_character_locator_for_each_child():
+    text = "负责推荐系统升级。" * 30
+    elements = [
+        ChunkElement(id="e1", text="# 项目经历", kind="heading"),
+        ChunkElement(
+            id="e2",
+            text=text,
+            source_locator={"kind": "char_range", "char_start": 100, "char_end": 100 + len(text)},
+        ),
+    ]
+
+    chunks = chunk_elements(elements, strategy=ChunkStrategy.MARKDOWN, chunk_size=80, chunk_overlap=10)
+
+    assert len(chunks) > 1
+    for chunk in chunks:
+        locator = chunk.source_locators[0]
+        assert locator["char_end"] - locator["char_start"] == len(chunk.content)
+
+
 def test_interview_strategy_keeps_question_and_answer_together():
     elements = [
         ChunkElement(id="e1", text="面试官 00:01 请介绍推荐系统升级项目", timestamp_start=1),

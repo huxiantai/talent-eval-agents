@@ -14,7 +14,7 @@ from app.document_parsers import parse_document
 from app.models import Document, DocumentVersion, EmployeeProfile, FileObject, ParseArtifact, ParseJob, ParseStatus
 from app.mineru_client import parse_with_mineru
 from app.object_store import ObjectStore
-from app.router import choose_parser
+from app.router import ParserKind, choose_parser
 from app.storage import build_object_key
 
 
@@ -85,18 +85,21 @@ def parse_version(db: Session, store: ObjectStore, version_id: UUID, job_id: UUI
         with tempfile.NamedTemporaryFile(suffix=suffix) as temp:
             temp.write(content)
             temp.flush()
-            try:
-                result = parse_document(Path(temp.name))
-            except Exception as exc:
-                if suffix.lower() not in {".pdf", ".png", ".jpg", ".jpeg"}:
-                    raise
-                logger.warning(
-                    "basic_parser_failed_fallback_mineru job_id=%s filename=%s reason=%s",
-                    job.id,
-                    file_object.original_name,
-                    exc,
-                )
+            if parser_kind == ParserKind.MINERU:
                 result = parse_with_mineru(Path(temp.name))
+            else:
+                try:
+                    result = parse_document(Path(temp.name))
+                except Exception as exc:
+                    if suffix.lower() not in {".pdf", ".png", ".jpg", ".jpeg"}:
+                        raise
+                    logger.warning(
+                        "basic_parser_failed_fallback_mineru job_id=%s filename=%s reason=%s",
+                        job.id,
+                        file_object.original_name,
+                        exc,
+                    )
+                    result = parse_with_mineru(Path(temp.name))
         markdown = result.text.encode("utf-8")
         structured = json.dumps(result.structured or result.metadata, ensure_ascii=False, indent=2).encode("utf-8")
         base = f"artifacts/{job.id}"

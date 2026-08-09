@@ -26,6 +26,7 @@ class ChunkElement:
     kind: str = "text"
     timestamp_start: float | None = None
     timestamp_end: float | None = None
+    source_locator: dict = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -37,6 +38,7 @@ class ChunkPiece:
     page_end: int | None = None
     timestamp_start: float | None = None
     timestamp_end: float | None = None
+    source_locators: list[dict] = field(default_factory=list)
 
 
 def _piece(elements: list[ChunkElement], heading_path: list[str] | None = None) -> ChunkPiece:
@@ -51,6 +53,7 @@ def _piece(elements: list[ChunkElement], heading_path: list[str] | None = None) 
         page_end=max(pages) if pages else None,
         timestamp_start=min(starts) if starts else None,
         timestamp_end=max(ends) if ends else None,
+        source_locators=[item.source_locator for item in elements if item.source_locator],
     )
 
 
@@ -62,18 +65,33 @@ def _split_long_element(
     texts = splitter.split_text(element.text)
     if not texts:
         return []
-    return [
-        ChunkPiece(
-            content=text,
-            element_ids=[element.id],
-            heading_path=list(heading_path or []),
-            page_start=element.page,
-            page_end=element.page,
-            timestamp_start=element.timestamp_start,
-            timestamp_end=element.timestamp_end,
+    result: list[ChunkPiece] = []
+    previous_end = 0
+    overlap = int(getattr(splitter, "_chunk_overlap", 0))
+    for text in texts:
+        locator = dict(element.source_locator)
+        if locator.get("kind") == "char_range":
+            search_start = max(0, previous_end - overlap)
+            local_start = element.text.find(text, search_start)
+            if local_start < 0:
+                local_start = search_start
+            previous_end = local_start + len(text)
+            base_start = int(element.source_locator["char_start"])
+            locator["char_start"] = base_start + local_start
+            locator["char_end"] = base_start + previous_end
+        result.append(
+            ChunkPiece(
+                content=text,
+                element_ids=[element.id],
+                heading_path=list(heading_path or []),
+                page_start=element.page,
+                page_end=element.page,
+                timestamp_start=element.timestamp_start,
+                timestamp_end=element.timestamp_end,
+                source_locators=[locator] if locator else [],
+            )
         )
-        for text in texts
-    ]
+    return result
 
 
 def _pack_elements(

@@ -46,8 +46,34 @@ def content_element_ids(elements: list[ChunkElement]) -> list[str]:
     return [element.id for element in elements if element.kind != "heading"]
 
 
+def _source_locator(item: dict, *, page: int | None = None) -> dict:
+    locator = dict(item.get("locator") or {})
+    if locator:
+        return locator
+    bbox = item.get("bbox")
+    if page is not None:
+        locator = {"kind": "page_region", "page": page}
+        if bbox is not None:
+            locator["bbox"] = bbox
+    return locator
+
+
 def elements_from_artifacts(markdown: str, structured: dict) -> list[ChunkElement]:
     content_list = structured.get("content_list") if isinstance(structured, dict) else None
+    if not content_list and isinstance(structured, dict) and isinstance(structured.get("segments"), list):
+        content_list = [
+            {
+                "type": "text",
+                "text": item.get("text", ""),
+                "locator": {
+                    "kind": "time_range",
+                    "segment": index,
+                    "timestamp_start": item.get("start"),
+                    "timestamp_end": item.get("end"),
+                },
+            }
+            for index, item in enumerate(structured["segments"], start=1)
+        ]
     source_items: list[tuple[int, dict, str]] = []
     if isinstance(content_list, list):
         for index, item in enumerate(content_list, start=1):
@@ -74,21 +100,43 @@ def elements_from_artifacts(markdown: str, structured: dict) -> list[ChunkElemen
             if source:
                 source_index, source_item = source
                 used_sources.add(source_index)
-                page = int(source_item.get("page_idx", 0)) + 1
-                element_id = f"p{page}-e{source_index}"
+                page = int(source_item["page_idx"]) + 1 if source_item.get("page_idx") is not None else None
+                element_id = f"p{page}-e{source_index}" if page is not None else f"md-e{block_index}"
             else:
                 source_item = {}
                 page = None
                 element_id = f"md-e{block_index}"
             is_heading = bool(re.match(r"^#{1,6}\s+", block)) or source_item.get("type") in {"title", "heading"}
-            result.append(ChunkElement(id=element_id, text=block, page=page, kind="heading" if is_heading else str(source_item.get("type") or "text")))
+            locator = _source_locator(source_item, page=page)
+            result.append(
+                ChunkElement(
+                    id=element_id,
+                    text=block,
+                    page=page,
+                    kind="heading" if is_heading else str(source_item.get("type") or "text"),
+                    timestamp_start=locator.get("timestamp_start"),
+                    timestamp_end=locator.get("timestamp_end"),
+                    source_locator=locator,
+                )
+            )
         return result
 
     result = []
     for index, item, text in source_items:
-        page = int(item.get("page_idx", 0)) + 1
+        page = int(item["page_idx"]) + 1 if item.get("page_idx") is not None else None
         kind = "heading" if item.get("type") in {"title", "heading"} else str(item.get("type") or "text")
-        result.append(ChunkElement(id=f"p{page}-e{index}", text=text, page=page, kind=kind))
+        locator = _source_locator(item, page=page)
+        result.append(
+            ChunkElement(
+                id=f"p{page}-e{index}" if page is not None else f"src-e{index}",
+                text=text,
+                page=page,
+                kind=kind,
+                timestamp_start=locator.get("timestamp_start"),
+                timestamp_end=locator.get("timestamp_end"),
+                source_locator=locator,
+            )
+        )
     return result
 
 
@@ -131,10 +179,16 @@ def _semantic_pieces(elements: list[ChunkElement], threshold: float) -> list[Chu
         breakpoint_threshold_amount=threshold,
     )
     for piece in pieces:
-        piece.element_ids = [element.id for element in elements if element.text in piece.content]
-        pages = [element.page for element in elements if element.id in piece.element_ids and element.page is not None]
+        matched_elements = [element for element in elements if element.text in piece.content]
+        piece.element_ids = [element.id for element in matched_elements]
+        piece.source_locators = [element.source_locator for element in matched_elements if element.source_locator]
+        pages = [element.page for element in matched_elements if element.page is not None]
+        starts = [element.timestamp_start for element in matched_elements if element.timestamp_start is not None]
+        ends = [element.timestamp_end for element in matched_elements if element.timestamp_end is not None]
         piece.page_start = min(pages) if pages else None
         piece.page_end = max(pages) if pages else None
+        piece.timestamp_start = min(starts) if starts else None
+        piece.timestamp_end = max(ends) if ends else None
     return pieces
 
 
@@ -190,6 +244,7 @@ def create_chunking_run(
                         element_ids=[],
                         heading_path=list(path_key),
                         parent_chunk_id=parent.id if parent else None,
+                        source_locators=[],
                     )
                     db.add(current_parent)
                     db.flush()
@@ -213,12 +268,18 @@ def create_chunking_run(
                 page_end=piece.page_end,
                 timestamp_start=piece.timestamp_start,
                 timestamp_end=piece.timestamp_end,
+                source_locators=piece.source_locators,
             )
             db.add(child)
             db.flush()
             for current_parent in parents_for_piece:
                 current_parent.content = f"{current_parent.content}\n\n{child.content}".strip()
                 current_parent.element_ids = list(dict.fromkeys([*current_parent.element_ids, *child.element_ids]))
+                existing_locators = {json.dumps(item, ensure_ascii=False, sort_keys=True) for item in current_parent.source_locators}
+                current_parent.source_locators = [
+                    *current_parent.source_locators,
+                    *(item for item in child.source_locators if json.dumps(item, ensure_ascii=False, sort_keys=True) not in existing_locators),
+                ]
             if children:
                 child.previous_chunk_id = children[-1].id
                 children[-1].next_chunk_id = child.id

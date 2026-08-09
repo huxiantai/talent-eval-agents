@@ -17,7 +17,13 @@
 
 Markdown 标题路径生成多级 Parent 树，正文 Chunk 关联最近一级 Parent，缺少分级标题时只生成独立 Child
 
-MinerU 的 Markdown 保留目录层级，`content_list.json` 用于补充页码和来源元素 ID
+解析产物统一为多级 Markdown 与 `content_list`，不同来源的定位对象统一聚合到 `source_locators`
+
+- Markdown 使用字符区间
+- DOCX 使用段落或表格序号
+- PPTX 使用 Slide、Shape 与 bbox
+- PDF 和图片使用 MinerU page 与 bbox
+- 语音转录使用时间区间
 
 ## 环境初始化
 

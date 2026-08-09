@@ -35,7 +35,7 @@ def test_mineru_content_list_adds_source_metadata_without_replacing_markdown_hie
         "content_list": [
             {"type": "title", "text": "项目经历", "page_idx": 0},
             {"type": "title", "text": "推荐系统升级", "page_idx": 1},
-            {"type": "text", "text": "负责召回服务重构", "page_idx": 1},
+            {"type": "text", "text": "负责召回服务重构", "page_idx": 1, "bbox": [10, 20, 300, 80]},
         ]
     }
 
@@ -45,6 +45,26 @@ def test_mineru_content_list_adds_source_metadata_without_replacing_markdown_hie
     assert [element.page for element in elements] == [1, 2, 2]
     chunks = chunk_elements(elements, strategy=ChunkStrategy.MARKDOWN, chunk_size=100, chunk_overlap=0)
     assert chunks[0].heading_path == ["项目经历", "推荐系统升级"]
+    assert chunks[0].source_locators[-1] == {
+        "kind": "page_region",
+        "page": 2,
+        "bbox": [10, 20, 300, 80],
+    }
+
+
+def test_simulated_transcript_creates_one_speaker_parent_with_time_locators():
+    structured = {
+        "segments": [
+            {"start": 0.0, "end": 30.0, "text": "第一段"},
+            {"start": 30.0, "end": 65.0, "text": "第二段"},
+        ]
+    }
+
+    elements = elements_from_artifacts("# 语音转录\n\n## 说话人 1\n\n第一段\n\n第二段", structured)
+    chunks = chunk_elements(elements, strategy=ChunkStrategy.MARKDOWN, chunk_size=100, chunk_overlap=10)
+
+    assert chunks[-1].heading_path == ["语音转录", "说话人 1"]
+    assert any(locator.get("timestamp_start") == 0.0 for chunk in chunks for locator in chunk.source_locators)
 
 
 def test_heading_path_expands_to_parent_tree_paths():

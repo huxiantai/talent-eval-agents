@@ -3,7 +3,7 @@ from pydantic import ValidationError
 
 from app.api import EmployeeInput
 from app.config import Settings
-from app.models import ChunkStrategyName, ChunkingStatus, ParseStatus
+from app.models import ChunkStrategyName, ChunkingStatus, DocumentChunk, ParseStatus
 from app.schemas import DocumentCreate
 
 
@@ -49,3 +49,7 @@ def test_settings_include_dashscope_models():
 def test_chunking_enums_cover_persisted_strategy_and_status():
     assert ChunkStrategyName.SEMANTIC.value == "semantic"
     assert ChunkingStatus.SUCCEEDED.value == "succeeded"
+
+
+def test_document_chunk_has_unified_source_locators_field():
+    assert "source_locators" in DocumentChunk.__table__.columns

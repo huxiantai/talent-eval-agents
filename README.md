@@ -9,6 +9,7 @@
 | `backend/` | FastAPI 后端、uv 环境、依赖锁、解析器、数据模型与测试 |
 | `database/init.sql` | PostgreSQL 完整建表 SQL |
 | `database/migrations/005_chunking.sql` | 第 5 课 Chunk、标注与评估表的幂等增量迁移 |
+| `database/migrations/006_chunk_source_locators.sql` | 为已有 Chunk 表增加统一来源定位字段 |
 | `frontend/` | React 前端 |
 | `docker-compose.yml` | PostgreSQL、MinIO、Redis 等基础服务 |
 
@@ -46,12 +47,20 @@
 
 自动模式固定使用 Markdown 层级分片，不根据材料类型切换算法。非面试材料在解析阶段统一生成多级 Markdown，MinerU 的 `content_list.json` 只补充页码和来源元素
 
+DOCX 使用 `python-docx` 保留标题样式与表格，PPTX 保留 Slide、Shape 与 bbox，PDF 和图片统一通过 MinerU 保留标题、页码与 bbox，原生 Markdown 使用字符区间，语音转录使用时间区间
+
+不同格式的定位对象统一写入 `document_chunks.source_locators`
+
 已有数据库应用第 5 课增量迁移
 
 ```bash
 docker compose -p talent-eval-agents-course exec -T postgres \
   psql -U talent -d talent_docs -v ON_ERROR_STOP=1 -f /dev/stdin \
   < database/migrations/005_chunking.sql
+
+docker compose -p talent-eval-agents-course exec -T postgres \
+  psql -U talent -d talent_docs -v ON_ERROR_STOP=1 -f /dev/stdin \
+  < database/migrations/006_chunk_source_locators.sql
 ```
 
 
@@ -63,7 +72,7 @@ uv sync --dev
 uv run pytest tests -q
 ```
 
-当前第 5 课回归结果为 `51 passed`
+当前第 5 课回归结果为 `57 passed`
 
 ## 服务日志
 
