@@ -55,8 +55,13 @@ services:
       S3_SECRET_KEY: talent_minio_password
       S3_BUCKET: talent-documents
       MINERU_URL: http://host.docker.internal:18001
+      LOG_DIR: /app/logs
+      SERVICE_NAME: backend
+      TZ: Asia/Shanghai
     ports:
       - "127.0.0.1:18080:18080"
+    volumes:
+      - ./backend/logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,6 +83,11 @@ services:
       S3_SECRET_KEY: talent_minio_password
       S3_BUCKET: talent-documents
       MINERU_URL: http://host.docker.internal:18001
+      LOG_DIR: /app/logs
+      SERVICE_NAME: worker
+      TZ: Asia/Shanghai
+    volumes:
+      - ./backend/logs:/app/logs
     depends_on:
       backend:
         condition: service_started

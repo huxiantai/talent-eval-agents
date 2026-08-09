@@ -1,3 +1,4 @@
+import logging
 from datetime import date
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from app.object_store import ObjectStore
 from app.services import current_version, parse_version, upload_document
 
 router = APIRouter(prefix="/api")
+logger = logging.getLogger(__name__)
 
 
 class EmployeeInput(BaseModel):
@@ -56,6 +58,7 @@ def create_employee(payload: EmployeeInput, db: Session = Depends(get_db)):
     db.add(item)
     db.commit()
     db.refresh(item)
+    logger.info("employee_created employee_id=%s employee_no=%s name=%s", item.id, item.employee_no, item.name)
     return employee_json(item)
 
 
@@ -72,6 +75,7 @@ def create_knowledge_base(payload: KnowledgeBaseInput, db: Session = Depends(get
     db.add(item)
     db.commit()
     db.refresh(item)
+    logger.info("knowledge_base_created knowledge_base_id=%s name=%s permission_scope=%s", item.id, item.name, item.permission_scope)
     return {"id": item.id, "name": item.name, "description": item.description, "permission_scope": item.permission_scope, "file_count": 0}
 
 
@@ -86,6 +90,7 @@ def list_documents(knowledge_base_id: UUID | None = None, db: Session = Depends(
 
 @router.post("/documents", status_code=201)
 async def create_document(file: UploadFile = File(...), employee_id: UUID | None = Form(None), knowledge_base_id: UUID | None = Form(None), candidate_id: str = Form(""), title: str = Form(...), document_type: str = Form(...), permission_scope: str = Form("hr_private"), db: Session = Depends(get_db)):
+    logger.info("document_upload_request filename=%s employee_id=%s knowledge_base_id=%s document_type=%s", file.filename, employee_id, knowledge_base_id, document_type)
     content = await file.read()
     if not content:
         raise HTTPException(400, "文件内容为空")
@@ -94,6 +99,7 @@ async def create_document(file: UploadFile = File(...), employee_id: UUID | None
     if knowledge_base_id and not db.get(KnowledgeBase, knowledge_base_id):
         raise HTTPException(404, "知识库不存在")
     document = upload_document(db, ObjectStore(), filename=file.filename or "upload.bin", content=content, candidate_id=candidate_id, employee_id=employee_id, knowledge_base_id=knowledge_base_id, title=title, document_type=document_type, permission_scope=permission_scope)
+    logger.info("document_upload_response document_id=%s material_no=%s", document.id, document.material_no)
     return {"id": document.id, "material_no": document.material_no, "candidate_id": document.candidate_id, "title": document.title}
 
 
@@ -119,6 +125,7 @@ def get_document(document_id: UUID, db: Session = Depends(get_db)):
 
 @router.post("/documents/{document_id}/parse")
 def parse_document_endpoint(document_id: UUID, async_mode: bool = True, db: Session = Depends(get_db)):
+    logger.info("parse_request_received document_id=%s async_mode=%s", document_id, async_mode)
     version = current_version(db, document_id)
     if not version:
         raise HTTPException(404, "文档版本不存在")
@@ -127,8 +134,10 @@ def parse_document_endpoint(document_id: UUID, async_mode: bool = True, db: Sess
         db.add(job)
         db.commit()
         Redis.from_url(get_settings().redis_url, decode_responses=True).rpush("talent:parse:queue", f"{job.id}:{version.id}")
+        logger.info("parse_job_queued document_id=%s version_id=%s job_id=%s queue=talent:parse:queue", document_id, version.id, job.id)
         return {"id": job.id, "status": job.status, "parser_name": job.parser_name, "error_message": None}
     job = parse_version(db, ObjectStore(), version.id)
+    logger.info("parse_sync_completed document_id=%s version_id=%s job_id=%s status=%s", document_id, version.id, job.id, job.status)
     return {"id": job.id, "status": job.status, "parser_name": job.parser_name, "error_message": job.error_message}
 
 
@@ -141,6 +150,7 @@ def retry_job(job_id: UUID, db: Session = Depends(get_db)):
     db.add(job)
     db.commit()
     Redis.from_url(get_settings().redis_url, decode_responses=True).rpush("talent:parse:queue", f"{job.id}:{job.document_version_id}")
+    logger.info("parse_job_retried previous_job_id=%s new_job_id=%s version_id=%s retry_count=%s", old.id, job.id, job.document_version_id, job.retry_count)
     return {"id": job.id, "status": job.status, "retry_count": job.retry_count}
 
 

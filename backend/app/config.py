@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     s3_bucket: str = "talent-documents"
     cors_origins: str = "http://localhost:15173,http://127.0.0.1:15173"
     mineru_url: str = "http://127.0.0.1:18001"
+    log_dir: str = "logs"
+    service_name: str = "backend"
 
 
 @lru_cache

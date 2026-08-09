@@ -1,7 +1,18 @@
+import logging
+from time import perf_counter
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+
 from app.api import router
 from app.config import get_settings
+from app.logging_config import configure_logging
+
+
+settings = get_settings()
+configure_logging(settings.log_dir, settings.service_name)
+logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
@@ -14,8 +25,33 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def log_request(request: Request, call_next):
+        started_at = perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = (perf_counter() - started_at) * 1000
+            logger.exception(
+                "http_request_failed method=%s path=%s duration_ms=%.2f",
+                request.method,
+                request.url.path,
+                duration_ms,
+            )
+            raise
+        duration_ms = (perf_counter() - started_at) * 1000
+        logger.info(
+            "http_request method=%s path=%s status=%s duration_ms=%.2f",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
+        return response
+
     @app.get("/api/health")
     def health() -> dict[str, str]:
+        logger.info("health_check status=ok")
         return {"service": "talent-document-api", "status": "ok"}
 
     app.include_router(router)

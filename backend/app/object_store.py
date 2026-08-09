@@ -1,9 +1,13 @@
+import logging
 from io import BytesIO
 
 import boto3
 from botocore.client import Config
 
 from app.config import Settings, get_settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class ObjectStore:
@@ -30,14 +34,30 @@ class ObjectStore:
     def ensure_bucket(self) -> None:
         try:
             self.client.head_bucket(Bucket=self.settings.s3_bucket)
-        except Exception:
+            logger.info("object_store_bucket_ready bucket=%s", self.settings.s3_bucket)
+        except Exception as exc:
+            logger.warning("object_store_bucket_missing bucket=%s reason=%s", self.settings.s3_bucket, exc)
             self.client.create_bucket(Bucket=self.settings.s3_bucket)
+            logger.info("object_store_bucket_created bucket=%s", self.settings.s3_bucket)
 
     def put_bytes(self, key: str, content: bytes, content_type: str) -> None:
+        logger.info(
+            "object_store_put_started bucket=%s key=%s size_bytes=%s content_type=%s",
+            self.settings.s3_bucket,
+            key,
+            len(content),
+            content_type,
+        )
         self.client.upload_fileobj(BytesIO(content), self.settings.s3_bucket, key, ExtraArgs={"ContentType": content_type})
+        logger.info("object_store_put_completed bucket=%s key=%s", self.settings.s3_bucket, key)
 
     def get_bytes(self, key: str) -> bytes:
-        return self.client.get_object(Bucket=self.settings.s3_bucket, Key=key)["Body"].read()
+        logger.info("object_store_get_started bucket=%s key=%s", self.settings.s3_bucket, key)
+        content = self.client.get_object(Bucket=self.settings.s3_bucket, Key=key)["Body"].read()
+        logger.info("object_store_get_completed bucket=%s key=%s size_bytes=%s", self.settings.s3_bucket, key, len(content))
+        return content
 
     def presigned_get(self, key: str, expires: int = 900) -> str:
-        return self.public_client.generate_presigned_url("get_object", Params={"Bucket": self.settings.s3_bucket, "Key": key}, ExpiresIn=expires)
+        url = self.public_client.generate_presigned_url("get_object", Params={"Bucket": self.settings.s3_bucket, "Key": key}, ExpiresIn=expires)
+        logger.info("object_store_presigned_url_created bucket=%s key=%s expires_seconds=%s", self.settings.s3_bucket, key, expires)
+        return url

@@ -37,6 +37,21 @@ uv sync --dev
 uv run pytest tests -q
 ```
 
+## 服务日志
+
+backend 与 worker 使用统一 Python 日志配置，控制台日志同时写入 `backend/logs/`
+
+```text
+backend/logs/backend-YYYY-MM-DD.log
+backend/logs/backend-error-YYYY-MM-DD.log
+backend/logs/worker-YYYY-MM-DD.log
+backend/logs/worker-error-YYYY-MM-DD.log
+```
+
+普通日志记录 HTTP 请求、员工与知识库写入、文件上传、MinIO 读写、解析任务、产物和 Worker 消费过程。ERROR 及以上日志额外写入对应服务的独立 error 文件。服务跨越零点运行时自动切换到新的日期文件
+
+本地运行默认使用 `backend/logs/`。Compose 为 backend 和 worker 配置 `LOG_DIR=/app/logs` 与 `TZ=Asia/Shanghai`，并将宿主机 `./backend/logs` 挂载到两个容器的 `/app/logs`
+
 ## 基础服务
 
 本项目使用独立 Compose 项目名 `talent-eval-agents-course`，并采用避让后的宿主机端口

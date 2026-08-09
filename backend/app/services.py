@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import mimetypes
 import tempfile
 from datetime import UTC, datetime
@@ -17,7 +18,18 @@ from app.router import choose_parser
 from app.storage import build_object_key
 
 
+logger = logging.getLogger(__name__)
+
+
 def upload_document(db: Session, store: ObjectStore, *, filename: str, content: bytes, candidate_id: str, title: str, document_type: str, employee_id: UUID | None = None, knowledge_base_id: UUID | None = None, permission_scope: str = "hr_private", tenant_id: str = "course-demo") -> Document:
+    logger.info(
+        "document_upload_started filename=%s size_bytes=%s employee_id=%s knowledge_base_id=%s document_type=%s",
+        filename,
+        len(content),
+        employee_id,
+        knowledge_base_id,
+        document_type,
+    )
     mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     digest = hashlib.sha256(content).hexdigest()
     employee = db.get(EmployeeProfile, employee_id) if employee_id else None
@@ -35,6 +47,13 @@ def upload_document(db: Session, store: ObjectStore, *, filename: str, content: 
     db.add(version)
     db.commit()
     db.refresh(document)
+    logger.info(
+        "document_upload_completed document_id=%s material_no=%s object_key=%s sha256=%s",
+        document.id,
+        document.material_no,
+        key,
+        digest,
+    )
     return document
 
 
@@ -44,6 +63,13 @@ def parse_version(db: Session, store: ObjectStore, version_id: UUID, job_id: UUI
         raise ValueError("文档版本不存在")
     file_object = db.get(FileObject, version.file_object_id)
     parser_kind = choose_parser(file_object.original_name)
+    logger.info(
+        "parse_job_started job_id=%s version_id=%s filename=%s parser_kind=%s",
+        job_id,
+        version_id,
+        file_object.original_name,
+        parser_kind.value,
+    )
     job = db.get(ParseJob, job_id) if job_id else None
     if job is None:
         job = ParseJob(document_version_id=version.id, parser_name=parser_kind.value)
@@ -61,9 +87,15 @@ def parse_version(db: Session, store: ObjectStore, version_id: UUID, job_id: UUI
             temp.flush()
             try:
                 result = parse_document(Path(temp.name))
-            except Exception:
+            except Exception as exc:
                 if suffix.lower() not in {".pdf", ".png", ".jpg", ".jpeg"}:
                     raise
+                logger.warning(
+                    "basic_parser_failed_fallback_mineru job_id=%s filename=%s reason=%s",
+                    job.id,
+                    file_object.original_name,
+                    exc,
+                )
                 result = parse_with_mineru(Path(temp.name))
         markdown = result.text.encode("utf-8")
         structured = json.dumps(result.structured or result.metadata, ensure_ascii=False, indent=2).encode("utf-8")
@@ -74,17 +106,21 @@ def parse_version(db: Session, store: ObjectStore, version_id: UUID, job_id: UUI
         ]:
             store.put_bytes(key, body, content_type)
             db.add(ParseArtifact(parse_job_id=job.id, artifact_type=artifact_type, bucket_name=store.settings.s3_bucket, object_key=key, content_type=content_type, size_bytes=len(body)))
+            logger.info("parse_artifact_saved job_id=%s artifact_type=%s object_key=%s size_bytes=%s", job.id, artifact_type, key, len(body))
         job.parser_name = result.parser_name
         job.status = ParseStatus.SUCCEEDED
         job.progress = 100
+        logger.info("parse_job_succeeded job_id=%s parser_name=%s text_chars=%s", job.id, result.parser_name, len(result.text))
     except Exception as exc:
         job.status = ParseStatus.FAILED
         job.error_code = "PARSE_FAILED"
         job.error_message = str(exc)[:2000]
         job.progress = 100
+        logger.exception("parse_job_failed job_id=%s version_id=%s error=%s", job.id, version_id, exc)
     job.finished_at = datetime.now(UTC)
     db.commit()
     db.refresh(job)
+    logger.info("parse_job_finished job_id=%s status=%s progress=%s", job.id, job.status, job.progress)
     return job
 
 
