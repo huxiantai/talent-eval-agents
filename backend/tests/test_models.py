@@ -2,7 +2,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.api import EmployeeInput
-from app.models import ParseStatus
+from app.config import Settings
+from app.models import ChunkStrategyName, ChunkingStatus, ParseStatus
 from app.schemas import DocumentCreate
 
 
@@ -30,3 +31,21 @@ def test_employee_job_level_uses_l_prefix():
 
     with pytest.raises(ValidationError):
         EmployeeInput(employee_no="C007", name="错误职级", job_level="T9")
+
+
+def test_settings_include_dashscope_models():
+    value = Settings(
+        _env_file=None,
+        dashscope_api_key="test-key",
+        chat_model="qwen-plus",
+        embedding_model="text-embedding-v3",
+    )
+
+    assert value.dashscope_api_key == "test-key"
+    assert value.chat_model == "qwen-plus"
+    assert value.embedding_model == "text-embedding-v3"
+
+
+def test_chunking_enums_cover_persisted_strategy_and_status():
+    assert ChunkStrategyName.SEMANTIC.value == "semantic"
+    assert ChunkingStatus.SUCCEEDED.value == "succeeded"

@@ -182,6 +182,157 @@ main {
   border-radius: 0
 }
 
+.chunkControls {
+  display: grid;
+  grid-template-columns: 1.4fr repeat(3, .8fr) auto;
+  align-items: end;
+  gap: 9px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #f7faf8
+}
+
+.chunkControls label,
+.annotationForm label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px
+}
+
+.chunkControls input,
+.chunkControls select,
+.annotationForm input {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: white
+}
+
+.runSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0
+}
+
+.runSummary span {
+  padding: 7px 9px;
+  border-radius: 7px;
+  color: var(--muted);
+  background: #eef4f1;
+  font-size: 11px
+}
+
+.runSummary b {
+  color: var(--green)
+}
+
+.chunkCard {
+  margin: 10px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white
+}
+
+.chunkCard header,
+.chunkCard footer {
+  position: static;
+  height: auto;
+  padding: 0;
+  border: 0;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-start
+}
+
+.chunkCard header span {
+  color: var(--green);
+  font-weight: 750
+}
+
+.chunkCard header em,
+.chunkCard>small,
+.chunkCard footer {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal
+}
+
+.chunkCard p {
+  white-space: pre-wrap;
+  line-height: 1.65
+}
+
+.chunkCard footer {
+  justify-content: space-between;
+  overflow-wrap: anywhere
+}
+
+.chunkCard code {
+  max-width: 65%;
+  white-space: normal
+}
+
+.annotationForm {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f7faf8
+}
+
+.annotationForm>div {
+  display: grid;
+  gap: 8px
+}
+
+.annotationForm>.primary {
+  grid-column: 1 / -1
+}
+
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 9px;
+  margin-top: 12px
+}
+
+.metricGrid div {
+  padding: 12px;
+  border: 1px solid #cfe1d8;
+  border-radius: 9px;
+  background: var(--mint)
+}
+
+.metricGrid small,
+.metricGrid b {
+  display: block
+}
+
+.metricGrid small {
+  color: var(--muted)
+}
+
+.metricGrid b {
+  margin-top: 4px;
+  color: var(--green);
+  font-size: 20px
+}
+
+.chunkError {
+  color: #aa3d3d
+}
+
+.empty.compact {
+  padding: 32px 20px
+}
+
 @media (max-width: 900px) {
   .side {
     width: 68px
@@ -207,5 +358,15 @@ main {
   .librarySubtitle select {
     min-width: 220px;
     max-width: calc(100vw - 150px)
+  }
+
+  .chunkControls,
+  .annotationForm,
+  .metricGrid {
+    grid-template-columns: 1fr
+  }
+
+  .annotationForm>.primary {
+    grid-column: auto
   }
 }

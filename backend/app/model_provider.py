@@ -1,0 +1,23 @@
+from langchain_community.embeddings import DashScopeEmbeddings
+from langchain_openai import ChatOpenAI
+
+from app.config import Settings, get_settings
+
+
+def get_chat_model(model_name: str | None = None, temperature: float = 0.2, settings: Settings | None = None) -> ChatOpenAI | None:
+    value = settings or get_settings()
+    if not value.dashscope_api_key or value.dashscope_api_key == "请用户自行填写":
+        return None
+    return ChatOpenAI(
+        model=model_name or value.chat_model,
+        api_key=value.dashscope_api_key,
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        temperature=temperature,
+    )
+
+
+def get_embedding_model(settings: Settings | None = None) -> DashScopeEmbeddings | None:
+    value = settings or get_settings()
+    if not value.dashscope_api_key or value.dashscope_api_key == "请用户自行填写":
+        return None
+    return DashScopeEmbeddings(model=value.embedding_model, dashscope_api_key=value.dashscope_api_key)

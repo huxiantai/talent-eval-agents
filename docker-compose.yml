@@ -46,6 +46,8 @@ services:
   backend:
     image: talent-eval-agents-course-backend:latest
     build: ./backend
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql+psycopg://talent:talent_dev_password@postgres:5432/talent_docs
       REDIS_URL: redis://redis:6379/0
@@ -73,6 +75,8 @@ services:
   worker:
     image: talent-eval-agents-course-backend:latest
     build: ./backend
+    env_file:
+      - .env
     command: ["uv", "run", "python", "-m", "app.worker"]
     environment:
       DATABASE_URL: postgresql+psycopg://talent:talent_dev_password@postgres:5432/talent_docs

@@ -24,6 +24,21 @@ class ParseStatus(StrEnum):
     FAILED = "failed"
 
 
+class ChunkingStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class ChunkStrategyName(StrEnum):
+    FIXED = "fixed"
+    RECURSIVE = "recursive"
+    MARKDOWN = "markdown"
+    SEMANTIC = "semantic"
+    INTERVIEW_QA = "interview_qa"
+
+
 class EmployeeProfile(Base):
     __tablename__ = "employee_profiles"
 
@@ -149,3 +164,73 @@ class DocumentMetadata(Base):
     metadata_value: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ChunkingRun(Base):
+    __tablename__ = "chunking_runs"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    parse_job_id: Mapped[UUID] = mapped_column(ForeignKey("parse_jobs.id"), index=True)
+    strategy: Mapped[ChunkStrategyName] = mapped_column(
+        Enum(ChunkStrategyName, name="chunk_strategy", values_callable=lambda values: [item.value for item in values])
+    )
+    status: Mapped[ChunkingStatus] = mapped_column(
+        Enum(ChunkingStatus, name="chunking_status", values_callable=lambda values: [item.value for item in values]),
+        default=ChunkingStatus.PENDING,
+    )
+    chunk_size: Mapped[int] = mapped_column(Integer)
+    chunk_overlap: Mapped[int] = mapped_column(Integer, default=0)
+    chunker_version: Mapped[str] = mapped_column(String(64), default="lesson-5-v1")
+    embedding_model: Mapped[str | None] = mapped_column(String(128))
+    configuration: Mapped[dict] = mapped_column(JSON, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    chunking_run_id: Mapped[UUID] = mapped_column(ForeignKey("chunking_runs.id", ondelete="CASCADE"), index=True)
+    document_version_id: Mapped[UUID] = mapped_column(ForeignKey("document_versions.id"), index=True)
+    candidate_id: Mapped[str] = mapped_column(String(64), index=True)
+    document_type: Mapped[str] = mapped_column(String(64))
+    permission_scope: Mapped[str] = mapped_column(String(64))
+    stable_key: Mapped[str] = mapped_column(String(64), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    chunk_level: Mapped[str] = mapped_column(String(16), default="child")
+    content: Mapped[str] = mapped_column(Text)
+    element_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    heading_path: Mapped[list[str]] = mapped_column(JSON, default=list)
+    parent_chunk_id: Mapped[UUID | None] = mapped_column(ForeignKey("document_chunks.id"))
+    previous_chunk_id: Mapped[UUID | None] = mapped_column(ForeignKey("document_chunks.id"))
+    next_chunk_id: Mapped[UUID | None] = mapped_column(ForeignKey("document_chunks.id"))
+    page_start: Mapped[int | None] = mapped_column(Integer)
+    page_end: Mapped[int | None] = mapped_column(Integer)
+    timestamp_start: Mapped[float | None] = mapped_column(Float)
+    timestamp_end: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BoundaryAnnotation(Base):
+    __tablename__ = "chunk_boundary_annotations"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    document_version_id: Mapped[UUID] = mapped_column(ForeignKey("document_versions.id"), index=True)
+    after_element_id: Mapped[str] = mapped_column(String(128))
+    after_position: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str | None] = mapped_column(String(255))
+    annotator: Mapped[str] = mapped_column(String(128), default="course-annotator")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvidenceQuestion(Base):
+    __tablename__ = "chunk_evidence_questions"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    document_version_id: Mapped[UUID] = mapped_column(ForeignKey("document_versions.id"), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    required_element_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    annotator: Mapped[str] = mapped_column(String(128), default="course-annotator")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -1,6 +1,23 @@
 # 后端服务
 
-本目录是独立的 uv Python 项目，包含 FastAPI 应用、解析器、数据库模型和自动化测试
+本目录是独立的 uv Python 项目，包含 FastAPI 应用、解析器、Chunk 流水线、数据库模型和自动化测试
+
+## 主要模块
+
+| 模块 | 用途 |
+|---|---|
+| `app/chunking.py` | 固定、递归、Markdown、语义与面试问答切片 |
+| `app/chunk_service.py` | Markdown 与来源元素对齐、Parent 树持久化和离线评估 |
+| `app/chunk_evaluation.py` | 覆盖率、Boundary F1、证据完整率和分散度 |
+| `app/model_provider.py` | 百炼 ChatOpenAI 与 DashScopeEmbeddings 配置 |
+
+语义分片使用 `langchain_experimental.text_splitter.SemanticChunker`，中文句子通过 `(?<=[。！？.!?])\s*` 识别句界。百炼模型通过根目录 `.env` 配置
+
+所有非面试材料在解析阶段统一转换为多级 Markdown，自动模式固定使用 Markdown 层级分片
+
+Markdown 标题路径生成多级 Parent 树，正文 Chunk 关联最近一级 Parent，缺少分级标题时只生成独立 Child
+
+MinerU 的 Markdown 保留目录层级，`content_list.json` 用于补充页码和来源元素 ID
 
 ## 环境初始化
 
