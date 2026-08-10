@@ -10,6 +10,7 @@
 | `database/init.sql` | PostgreSQL 完整建表 SQL |
 | `database/migrations/005_chunking.sql` | 第 5 课 Chunk、标注与评估表的幂等增量迁移 |
 | `database/migrations/006_chunk_source_locators.sql` | 为已有 Chunk 表增加统一来源定位字段 |
+| `database/migrations/007_milvus_evidence_index.sql` | 第 6 课 Milvus 索引任务表的幂等增量迁移 |
 | `frontend/` | React 前端 |
 | `docker-compose.yml` | PostgreSQL、MinIO、Redis 等基础服务 |
 
@@ -33,6 +34,9 @@
 | `POST /api/documents/{id}/chunks` | 按固定、递归、Markdown、语义或问答策略生成切片 |
 | `POST /api/documents/{id}/chunk-annotations` | 保存人工业务边界与问题证据标注 |
 | `GET /api/documents/{id}/chunk-evaluation` | 计算内容覆盖、Boundary F1、证据完整率与分散度 |
+| `POST /api/documents/{id}/evidence-index` | 创建当前文档版本的异步 Milvus 索引任务 |
+| `POST /api/evidence/search` | 按租户、权限范围和业务条件检索人才证据 |
+| `POST /api/index-jobs/{id}/retry` | 为失败的 Milvus 索引任务创建新的幂等重试任务 |
 
 ## Chunk 模块
 
@@ -63,6 +67,60 @@ docker compose -p talent-eval-agents-course exec -T postgres \
   < database/migrations/006_chunk_source_locators.sql
 ```
 
+## Milvus 证据索引
+
+Milvus 作为独立向量检索服务，PostgreSQL 继续保存文档、版本、Chunk 和索引任务状态
+
+| 路径 | 用途 |
+|---|---|
+| `backend/app/milvus_store.py` | Collection Schema、HNSW、Upsert、标量过滤、搜索与按版本删除 |
+| `backend/app/evidence_index_service.py` | Chunk 向量化、Evidence Record 映射、索引任务执行与状态更新 |
+| `backend/scripts/verify_milvus.py` | 使用确定性向量验证 Collection、Upsert、权限过滤和 HNSW 搜索 |
+| `backend/tests/test_milvus_store.py` | Milvus 存储适配器的行为回归测试 |
+| `backend/tests/test_evidence_index_service.py` | Chunk 到 Evidence Record 的转换与索引编排测试 |
+
+开发环境使用 Milvus Standalone 2.6.17、etcd 和已有 MinIO
+
+- 宿主机 Milvus gRPC 端口为 `19531`
+
+- 宿为 Milvus 健康检查端口为 `19091`
+
+- 容器内 backend 与 worker 通过 `http://milvus:19530` 访问
+
+已有数据库应用第 6 课增量迁移
+
+```bash
+docker compose -p talent-eval-agents-course exec -T postgres \
+  psql -U talent -d talent_docs -v ON_ERROR_STOP=1 -f /dev/stdin \
+  < database/migrations/007_milvus_evidence_index.sql
+```
+
+启动服务并执行 Milvus 独立验收
+
+```bash
+docker compose -p talent-eval-agents-course up -d
+cd backend
+uv run python -m scripts.verify_milvus
+```
+
+验收脚本的实际运行结果
+
+```json
+{"collection": "lesson6_verification_v1", "upserted": 2, "matched": 1, "top_candidate": "C001", "top_score": 1.0, "permission_scope": "hr_private"}
+```
+
+Collection 默认使用 1024 维向量、COSINE 距离和 HNSW 索引
+
+- `M=16`
+
+- `efConstruction=128`
+
+- 查询默认 `ef=80`
+
+- 常规查询默认使用 Bounded consistency
+
+- 写后读验收使用 Strong consistency
+
 
 ## 后端验证
 
@@ -72,7 +130,7 @@ uv sync --dev
 uv run pytest tests -q
 ```
 
-当前第 5 课回归结果为 `57 passed`
+当前第 6 课回归结果为 `71 passed`
 
 ## 服务日志
 
@@ -104,7 +162,7 @@ docker compose -p talent-eval-agents-course ps
 
 前端采用 React、TypeScript 与 Vite。Docker 使用 Node.js 多阶段构建前端产物，再由 Nginx 托管 `dist`
 
-宿主机端口为 PostgreSQL 15432、Redis 16379、MinIO 19000、MinIO Console 19001、后端 18080、前端 15173
+宿主机端口为 PostgreSQL 15432、Redis 16379、MinIO 19000、MinIO Console 19001、Milvus 19531、Milvus 健康检查 19091、后端 18080、前端 15173
 
 后端容器通过 `S3_ENDPOINT_URL=http://minio:9000` 访问 MinIO，通过 `S3_PUBLIC_ENDPOINT_URL=http://127.0.0.1:19000` 生成浏览器可访问的预签名 URL
 

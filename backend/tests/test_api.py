@@ -21,3 +21,15 @@ def test_openapi_exposes_chunking_and_annotation_workflow():
     assert set(paths["/api/documents/{document_id}/chunks"]) == {"get", "post"}
     assert "/api/documents/{document_id}/chunk-annotations" in paths
     assert "/api/documents/{document_id}/chunk-evaluation" in paths
+
+
+def test_openapi_exposes_evidence_index_and_search_workflow():
+    client = TestClient(create_app())
+
+    paths = client.get("/openapi.json").json()["paths"]
+
+    assert "/api/documents/{document_id}/evidence-index" in paths
+    assert set(paths["/api/documents/{document_id}/evidence-index"]) == {"post"}
+    assert "/api/evidence/search" in paths
+    assert set(paths["/api/evidence/search"]) == {"post"}
+    assert "/api/index-jobs/{job_id}/retry" in paths

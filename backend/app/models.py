@@ -31,6 +31,13 @@ class ChunkingStatus(StrEnum):
     FAILED = "failed"
 
 
+class IndexStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
 class ChunkStrategyName(StrEnum):
     FIXED = "fixed"
     RECURSIVE = "recursive"
@@ -211,6 +218,25 @@ class DocumentChunk(Base):
     timestamp_start: Mapped[float | None] = mapped_column(Float)
     timestamp_end: Mapped[float | None] = mapped_column(Float)
     source_locators: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvidenceIndexJob(Base):
+    __tablename__ = "evidence_index_jobs"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    document_version_id: Mapped[UUID] = mapped_column(ForeignKey("document_versions.id"), index=True)
+    status: Mapped[IndexStatus] = mapped_column(
+        Enum(IndexStatus, name="index_status", values_callable=lambda values: [item.value for item in values]),
+        default=IndexStatus.PENDING,
+    )
+    embedding_model: Mapped[str] = mapped_column(String(128))
+    collection_name: Mapped[str] = mapped_column(String(128))
+    indexed_count: Mapped[int] = mapped_column(Integer, default=0)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

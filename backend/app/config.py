@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     dashscope_api_key: str = ""
     chat_model: str = "qwen-plus"
     embedding_model: str = "text-embedding-v3"
+    embedding_dimension: int = 1024
+    milvus_uri: str = "http://127.0.0.1:19531"
+    milvus_token: str = "root:Milvus"
+    milvus_collection: str = "talent_evidence_v1"
     log_dir: str = "logs"
     service_name: str = "backend"
 

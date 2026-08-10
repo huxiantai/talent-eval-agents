@@ -2,7 +2,7 @@ import logging
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from redis import Redis
 from sqlalchemy import func, select
@@ -19,7 +19,10 @@ from app.chunk_service import (
 from app.chunking import ChunkStrategy
 from app.config import get_settings
 from app.database import get_db
-from app.models import Document, DocumentVersion, EmployeeProfile, FileObject, KnowledgeBase, ParseArtifact, ParseJob
+from app.evidence_index_service import get_evidence_store
+from app.milvus_store import EvidenceFilter
+from app.model_provider import get_embedding_model
+from app.models import Document, DocumentVersion, EmployeeProfile, EvidenceIndexJob, FileObject, KnowledgeBase, ParseArtifact, ParseJob
 from app.object_store import ObjectStore
 from app.services import current_version, parse_version, upload_document
 
@@ -67,6 +70,14 @@ class ChunkAnnotationInput(BaseModel):
     annotator: str = "course-annotator"
     boundaries: list[BoundaryInput] = Field(default_factory=list)
     questions: list[EvidenceQuestionInput] = Field(default_factory=list)
+
+
+class EvidenceSearchInput(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    candidate_ids: list[str] | None = None
+    document_types: list[str] | None = None
+    limit: int = Field(default=10, ge=1, le=100)
+    ef: int = Field(default=80, ge=10, le=1000)
 
 
 def employee_json(item: EmployeeProfile, material_count: int = 0):
@@ -246,6 +257,66 @@ def create_document_chunks(document_id: UUID, payload: ChunkingInput, db: Sessio
     return {"id": run.id, "strategy": run.strategy, "status": run.status}
 
 
+@router.post("/documents/{document_id}/evidence-index", status_code=202)
+def create_evidence_index(document_id: UUID, db: Session = Depends(get_db)):
+    version = current_version(db, document_id)
+    if not version:
+        raise HTTPException(404, "文档版本不存在")
+    settings = get_settings()
+    job = EvidenceIndexJob(
+        document_version_id=version.id,
+        embedding_model=settings.embedding_model,
+        collection_name=settings.milvus_collection,
+    )
+    db.add(job)
+    db.commit()
+    Redis.from_url(settings.redis_url, decode_responses=True).rpush(
+        "talent:index:queue", f"{job.id}:{version.id}"
+    )
+    logger.info("evidence_index_job_queued job_id=%s version_id=%s", job.id, version.id)
+    return {"id": job.id, "status": job.status, "document_version_id": version.id}
+
+
+@router.post("/evidence/search")
+def search_evidence(
+    payload: EvidenceSearchInput,
+    x_tenant_id: str = Header(...),
+    x_permission_scopes: str = Header(...),
+):
+    permission_scopes = [value.strip() for value in x_permission_scopes.split(",") if value.strip()]
+    if not permission_scopes:
+        raise HTTPException(403, "缺少可用的证据权限范围")
+    embedder = get_embedding_model()
+    if embedder is None:
+        raise HTTPException(503, "Embedding 服务未配置")
+    try:
+        query_vector = embedder.embed_query(payload.query)
+        results = get_evidence_store().search(
+            list(query_vector),
+            filters=EvidenceFilter(
+                tenant_id=x_tenant_id,
+                permission_scopes=permission_scopes,
+                candidate_ids=payload.candidate_ids,
+                document_types=payload.document_types,
+            ),
+            limit=payload.limit,
+            ef=payload.ef,
+        )
+    except Exception as exc:
+        logger.exception("evidence_search_failed tenant_id=%s", x_tenant_id)
+        raise HTTPException(503, f"证据检索失败: {exc}") from exc
+    return [
+        {
+            "chunk_id": item.chunk_id,
+            "candidate_id": item.candidate_id,
+            "content": item.content,
+            "score": item.score,
+            "metadata": item.metadata,
+        }
+        for item in results
+    ]
+
+
 @router.post("/documents/{document_id}/chunk-annotations", status_code=201)
 def create_chunk_annotations(document_id: UUID, payload: ChunkAnnotationInput, db: Session = Depends(get_db)):
     version = current_version(db, document_id)
@@ -287,6 +358,33 @@ def retry_job(job_id: UUID, db: Session = Depends(get_db)):
     db.commit()
     Redis.from_url(get_settings().redis_url, decode_responses=True).rpush("talent:parse:queue", f"{job.id}:{job.document_version_id}")
     logger.info("parse_job_retried previous_job_id=%s new_job_id=%s version_id=%s retry_count=%s", old.id, job.id, job.document_version_id, job.retry_count)
+    return {"id": job.id, "status": job.status, "retry_count": job.retry_count}
+
+
+@router.post("/index-jobs/{job_id}/retry", status_code=202)
+def retry_index_job(job_id: UUID, db: Session = Depends(get_db)):
+    old = db.get(EvidenceIndexJob, job_id)
+    if not old:
+        raise HTTPException(404, "索引任务不存在")
+    if old.status != "failed":
+        raise HTTPException(409, "只能重试失败的索引任务")
+    job = EvidenceIndexJob(
+        document_version_id=old.document_version_id,
+        embedding_model=old.embedding_model,
+        collection_name=old.collection_name,
+        retry_count=old.retry_count + 1,
+    )
+    db.add(job)
+    db.commit()
+    Redis.from_url(get_settings().redis_url, decode_responses=True).rpush(
+        "talent:index:queue", f"{job.id}:{job.document_version_id}"
+    )
+    logger.info(
+        "evidence_index_job_retried previous_job_id=%s new_job_id=%s retry_count=%s",
+        old.id,
+        job.id,
+        job.retry_count,
+    )
     return {"id": job.id, "status": job.status, "retry_count": job.retry_count}
 
 
