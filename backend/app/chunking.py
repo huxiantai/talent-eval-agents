@@ -5,17 +5,12 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Iterable
 
-from langchain_core.embeddings import Embeddings
-from langchain_experimental.text_splitter import SemanticChunker
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 class ChunkStrategy(StrEnum):
-    FIXED = "fixed"
     RECURSIVE = "recursive"
     MARKDOWN = "markdown"
-    SEMANTIC = "semantic"
-    INTERVIEW_QA = "interview_qa"
 
 
 @dataclass(slots=True)
@@ -26,6 +21,9 @@ class ChunkElement:
     kind: str = "text"
     timestamp_start: float | None = None
     timestamp_end: float | None = None
+    speaker: str | None = None
+    markdown_start: int | None = None
+    markdown_end: int | None = None
     source_locator: dict = field(default_factory=dict)
 
 
@@ -38,6 +36,8 @@ class ChunkPiece:
     page_end: int | None = None
     timestamp_start: float | None = None
     timestamp_end: float | None = None
+    markdown_start: int | None = None
+    markdown_end: int | None = None
     source_locators: list[dict] = field(default_factory=list)
 
 
@@ -45,6 +45,8 @@ def _piece(elements: list[ChunkElement], heading_path: list[str] | None = None) 
     pages = [item.page for item in elements if item.page is not None]
     starts = [item.timestamp_start for item in elements if item.timestamp_start is not None]
     ends = [item.timestamp_end for item in elements if item.timestamp_end is not None]
+    markdown_starts = [item.markdown_start for item in elements if item.markdown_start is not None]
+    markdown_ends = [item.markdown_end for item in elements if item.markdown_end is not None]
     return ChunkPiece(
         content="\n\n".join(item.text for item in elements).strip(),
         element_ids=[item.id for item in elements],
@@ -53,6 +55,8 @@ def _piece(elements: list[ChunkElement], heading_path: list[str] | None = None) 
         page_end=max(pages) if pages else None,
         timestamp_start=min(starts) if starts else None,
         timestamp_end=max(ends) if ends else None,
+        markdown_start=min(markdown_starts) if markdown_starts else None,
+        markdown_end=max(markdown_ends) if markdown_ends else None,
         source_locators=[item.source_locator for item in elements if item.source_locator],
     )
 
@@ -69,16 +73,11 @@ def _split_long_element(
     previous_end = 0
     overlap = int(getattr(splitter, "_chunk_overlap", 0))
     for text in texts:
-        locator = dict(element.source_locator)
-        if locator.get("kind") == "char_range":
-            search_start = max(0, previous_end - overlap)
-            local_start = element.text.find(text, search_start)
-            if local_start < 0:
-                local_start = search_start
-            previous_end = local_start + len(text)
-            base_start = int(element.source_locator["char_start"])
-            locator["char_start"] = base_start + local_start
-            locator["char_end"] = base_start + previous_end
+        search_start = max(0, previous_end - overlap)
+        local_start = element.text.find(text, search_start)
+        if local_start < 0:
+            local_start = search_start
+        previous_end = local_start + len(text)
         result.append(
             ChunkPiece(
                 content=text,
@@ -88,7 +87,9 @@ def _split_long_element(
                 page_end=element.page,
                 timestamp_start=element.timestamp_start,
                 timestamp_end=element.timestamp_end,
-                source_locators=[locator] if locator else [],
+                markdown_start=(element.markdown_start + local_start) if element.markdown_start is not None else None,
+                markdown_end=(element.markdown_start + previous_end) if element.markdown_start is not None else None,
+                source_locators=[element.source_locator] if element.source_locator else [],
             )
         )
     return result
@@ -151,27 +152,6 @@ def _markdown_chunks(
     return result
 
 
-def _interview_chunks(
-    elements: list[ChunkElement],
-    splitter: RecursiveCharacterTextSplitter,
-    chunk_size: int,
-) -> list[ChunkPiece]:
-    groups: list[list[ChunkElement]] = []
-    current: list[ChunkElement] = []
-    for element in elements:
-        is_question = element.text.lstrip().startswith(("面试官", "访谈人", "评委")) # 当前实现，实际需要根据语音识别出的发言人名称
-        if is_question and current:
-            groups.append(current)
-            current = []
-        current.append(element)
-    if current:
-        groups.append(current)
-    result: list[ChunkPiece] = []
-    for index, group in enumerate(groups, start=1):
-        result.extend(_pack_elements(group, splitter, chunk_size, ["面试问答", f"问答 {index}"]))
-    return result
-
-
 def chunk_elements(
     elements: list[ChunkElement],
     *,
@@ -184,38 +164,12 @@ def chunk_elements(
     if chunk_overlap < 0 or chunk_overlap >= chunk_size:
         raise ValueError("chunk_overlap 必须大于等于 0 且小于 chunk_size")
     separators = ["\n\n", "\n", "。", "！", "？", ";", "；", "，", " ", ""]
-    if strategy == ChunkStrategy.FIXED:
-        separators = [""]
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         separators=separators,
         keep_separator=True,
     )
-    if strategy == ChunkStrategy.INTERVIEW_QA:
-        return _interview_chunks(elements, splitter, chunk_size)
     if strategy == ChunkStrategy.MARKDOWN:
         return _markdown_chunks(elements, splitter, chunk_size)
-    if strategy == ChunkStrategy.SEMANTIC:
-        raise ValueError("语义分片需要通过 semantic_chunk_text 调用 Embedding 模型")
     return _pack_elements(elements, splitter, chunk_size)
-
-
-def semantic_chunk_text(
-    text: str,
-    *,
-    embeddings: Embeddings,
-    breakpoint_threshold_type: str = "percentile",
-    breakpoint_threshold_amount: float | None = 90,
-    buffer_size: int = 1,
-    sentence_split_regex: str = r"(?<=[。！？.!?])\s*",
-) -> list[ChunkPiece]:
-    splitter = SemanticChunker(
-        embeddings,
-        buffer_size=buffer_size,
-        breakpoint_threshold_type=breakpoint_threshold_type,
-        breakpoint_threshold_amount=breakpoint_threshold_amount,
-        sentence_split_regex=sentence_split_regex,
-    )
-    documents = splitter.create_documents([text])
-    return [ChunkPiece(content=document.page_content, element_ids=[]) for document in documents]

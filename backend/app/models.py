@@ -32,11 +32,8 @@ class ChunkingStatus(StrEnum):
 
 
 class ChunkStrategyName(StrEnum):
-    FIXED = "fixed"
     RECURSIVE = "recursive"
     MARKDOWN = "markdown"
-    SEMANTIC = "semantic"
-    INTERVIEW_QA = "interview_qa"
 
 
 class EmployeeProfile(Base):
@@ -181,8 +178,6 @@ class ChunkingRun(Base):
     chunk_size: Mapped[int] = mapped_column(Integer)
     chunk_overlap: Mapped[int] = mapped_column(Integer, default=0)
     chunker_version: Mapped[str] = mapped_column(String(64), default="lesson-5-v1")
-    embedding_model: Mapped[str | None] = mapped_column(String(128))
-    configuration: Mapped[dict] = mapped_column(JSON, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -210,28 +205,7 @@ class DocumentChunk(Base):
     page_end: Mapped[int | None] = mapped_column(Integer)
     timestamp_start: Mapped[float | None] = mapped_column(Float)
     timestamp_end: Mapped[float | None] = mapped_column(Float)
+    markdown_start: Mapped[int | None] = mapped_column(Integer)
+    markdown_end: Mapped[int | None] = mapped_column(Integer)
     source_locators: Mapped[list[dict]] = mapped_column(JSON, default=list)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class BoundaryAnnotation(Base):
-    __tablename__ = "chunk_boundary_annotations"
-
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    document_version_id: Mapped[UUID] = mapped_column(ForeignKey("document_versions.id"), index=True)
-    after_element_id: Mapped[str] = mapped_column(String(128))
-    after_position: Mapped[int] = mapped_column(Integer)
-    reason: Mapped[str | None] = mapped_column(String(255))
-    annotator: Mapped[str] = mapped_column(String(128), default="course-annotator")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class EvidenceQuestion(Base):
-    __tablename__ = "chunk_evidence_questions"
-
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    document_version_id: Mapped[UUID] = mapped_column(ForeignKey("document_versions.id"), index=True)
-    question: Mapped[str] = mapped_column(Text)
-    required_element_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
-    annotator: Mapped[str] = mapped_column(String(128), default="course-annotator")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

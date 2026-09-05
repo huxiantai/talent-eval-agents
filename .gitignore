@@ -11,3 +11,5 @@ sample-data/qa/pptx/
 sample-data/qa/xlsx/
 sample-data/
 output/
+
+dist/

@@ -3,7 +3,7 @@ from io import BytesIO
 
 from openpyxl import Workbook
 
-from app.parsers import parse_csv, parse_json, parse_xlsx
+from app.parsers import parse_csv, parse_json, parse_xlsx, parse_pptx
 
 
 def test_parse_csv_preserves_headers_and_rows():

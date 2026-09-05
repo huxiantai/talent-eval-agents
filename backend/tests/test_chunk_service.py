@@ -1,5 +1,5 @@
 from app import chunk_service
-from app.chunk_service import content_element_ids, default_chunk_strategy, elements_from_artifacts
+from app.chunk_service import content_element_ids, elements_from_artifacts, infer_chunk_strategy
 from app.chunking import ChunkStrategy, chunk_elements
 
 
@@ -19,14 +19,49 @@ def test_mineru_content_list_becomes_page_aware_elements():
 
 
 def test_markdown_fallback_preserves_headings_as_elements():
-    elements = elements_from_artifacts("# 工作经历\n\n## 星云科技\n\n负责推荐系统升级", {})
+    markdown = "# 工作经历\n\n## 星云科技\n\n负责推荐系统升级"
+    elements = elements_from_artifacts(markdown, {})
 
     assert [element.kind for element in elements] == ["heading", "heading", "text"]
     assert elements[-1].text == "负责推荐系统升级"
+    assert all(element.markdown_start is not None and element.markdown_end is not None for element in elements)
+    assert all(markdown[element.markdown_start:element.markdown_end] == element.text for element in elements)
+    assert all(element.source_locator == {} for element in elements)
 
 
-def test_auto_mode_defaults_to_markdown_strategy():
-    assert default_chunk_strategy() == ChunkStrategy.MARKDOWN
+def test_docx_locator_is_not_treated_as_auxiliary_source_position():
+    markdown = "# 项目经历\n\n负责推荐系统升级"
+    structured = {
+        "content_list": [
+            {"type": "title", "text": "项目经历", "locator": {"kind": "word_paragraph", "paragraph": 1}},
+            {"type": "text", "text": "负责推荐系统升级", "locator": {"kind": "word_paragraph", "paragraph": 2}},
+        ]
+    }
+
+    elements = elements_from_artifacts(markdown, structured)
+
+    assert all(element.source_locator == {} for element in elements)
+    assert [(element.markdown_start, element.markdown_end) for element in elements] == [(0, 6), (8, 16)]
+
+
+def test_infer_chunk_strategy_uses_markdown_for_structured_documents():
+    elements = elements_from_artifacts("# 项目经历\n\n负责推荐系统升级", {})
+
+    assert infer_chunk_strategy(elements) == ChunkStrategy.MARKDOWN
+
+
+def test_infer_chunk_strategy_falls_back_to_recursive_for_plain_text():
+    elements = elements_from_artifacts(
+        "第一段连续转录文本\n\n第二段连续转录文本",
+        {
+            "segments": [
+                {"start": 0.0, "end": 12.0, "text": "第一段连续转录文本"},
+                {"start": 12.0, "end": 24.0, "text": "第二段连续转录文本"},
+            ]
+        },
+    )
+
+    assert infer_chunk_strategy(elements) == ChunkStrategy.RECURSIVE
 
 
 def test_mineru_content_list_adds_source_metadata_without_replacing_markdown_hierarchy():
@@ -50,9 +85,10 @@ def test_mineru_content_list_adds_source_metadata_without_replacing_markdown_hie
         "page": 2,
         "bbox": [10, 20, 300, 80],
     }
+    assert markdown[chunks[0].markdown_start:chunks[0].markdown_end] == chunks[0].content
 
 
-def test_simulated_transcript_creates_one_speaker_parent_with_time_locators():
+def test_plain_transcript_chunks_keep_time_locators_without_heading_parents():
     structured = {
         "segments": [
             {"start": 0.0, "end": 30.0, "text": "第一段"},
@@ -60,10 +96,10 @@ def test_simulated_transcript_creates_one_speaker_parent_with_time_locators():
         ]
     }
 
-    elements = elements_from_artifacts("# 语音转录\n\n## 说话人 1\n\n第一段\n\n第二段", structured)
-    chunks = chunk_elements(elements, strategy=ChunkStrategy.MARKDOWN, chunk_size=100, chunk_overlap=10)
+    elements = elements_from_artifacts("第一段\n\n第二段", structured)
+    chunks = chunk_elements(elements, strategy=ChunkStrategy.RECURSIVE, chunk_size=100, chunk_overlap=10)
 
-    assert chunks[-1].heading_path == ["语音转录", "说话人 1"]
+    assert all(chunk.heading_path == [] for chunk in chunks)
     assert any(locator.get("timestamp_start") == 0.0 for chunk in chunks for locator in chunk.source_locators)
 
 

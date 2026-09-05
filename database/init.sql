@@ -3,7 +3,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TYPE document_status AS ENUM ('active', 'inactive', 'deleted');
 CREATE TYPE parse_status AS ENUM ('pending', 'running', 'succeeded', 'partially_succeeded', 'failed');
 CREATE TYPE chunking_status AS ENUM ('pending', 'running', 'succeeded', 'failed');
-CREATE TYPE chunk_strategy AS ENUM ('fixed', 'recursive', 'markdown', 'semantic', 'interview_qa');
+CREATE TYPE chunk_strategy AS ENUM ('recursive', 'markdown');
 
 CREATE TABLE employee_profiles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -127,8 +127,6 @@ CREATE TABLE chunking_runs (
     chunk_size INTEGER NOT NULL CHECK (chunk_size > 0),
     chunk_overlap INTEGER NOT NULL DEFAULT 0 CHECK (chunk_overlap >= 0),
     chunker_version VARCHAR(64) NOT NULL DEFAULT 'lesson-5-v1',
-    embedding_model VARCHAR(128),
-    configuration JSONB NOT NULL DEFAULT '{}'::jsonb,
     error_message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at TIMESTAMPTZ
@@ -156,6 +154,8 @@ CREATE TABLE document_chunks (
     page_end INTEGER,
     timestamp_start DOUBLE PRECISION,
     timestamp_end DOUBLE PRECISION,
+    markdown_start INTEGER,
+    markdown_end INTEGER,
     source_locators JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (chunking_run_id, stable_key)
@@ -164,26 +164,6 @@ CREATE TABLE document_chunks (
 CREATE INDEX idx_document_chunks_version ON document_chunks (document_version_id, position);
 CREATE INDEX idx_document_chunks_candidate ON document_chunks (candidate_id, document_type);
 
-CREATE TABLE chunk_boundary_annotations (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    document_version_id UUID NOT NULL REFERENCES document_versions(id),
-    after_element_id VARCHAR(128) NOT NULL,
-    after_position INTEGER NOT NULL CHECK (after_position > 0),
-    reason VARCHAR(255),
-    annotator VARCHAR(128) NOT NULL DEFAULT 'course-annotator',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (document_version_id, after_element_id, annotator)
-);
-
-CREATE TABLE chunk_evidence_questions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    document_version_id UUID NOT NULL REFERENCES document_versions(id),
-    question TEXT NOT NULL,
-    required_element_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-    annotator VARCHAR(128) NOT NULL DEFAULT 'course-annotator',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 COMMENT ON TABLE documents IS '业务层逻辑文档，同一文档可以有多个文件版本';
 COMMENT ON TABLE employee_profiles IS '员工花名册结构化基础信息';
 COMMENT ON TABLE knowledge_bases IS '档案资料库中的知识库';
@@ -191,7 +171,5 @@ COMMENT ON TABLE file_objects IS '对象存储中的物理文件索引';
 COMMENT ON TABLE document_versions IS '逻辑文档与物理文件之间的版本关系';
 COMMENT ON TABLE parse_jobs IS '文件解析任务及状态变化';
 COMMENT ON TABLE parse_artifacts IS 'Markdown、JSON、图片、转写等解析产物索引';
-COMMENT ON TABLE chunking_runs IS '一次可复现的文档切片运行及其策略参数';
+COMMENT ON TABLE chunking_runs IS '一次可复现的文档切片运行及其自动判定策略';
 COMMENT ON TABLE document_chunks IS '带来源定位、父子关系、相邻关系和权限信息的人才证据单元';
-COMMENT ON TABLE chunk_boundary_annotations IS '标注员确认的业务单元边界';
-COMMENT ON TABLE chunk_evidence_questions IS '评估问题及回答所需的最小证据元素';

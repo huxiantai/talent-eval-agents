@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.document_parsers import parse_document
+from app.document_parsers import parse_document, transcript_segments_to_text
 
 
 SAMPLES = Path(__file__).resolve().parents[2] / "sample-data" / "generated"
@@ -19,7 +19,7 @@ def test_docx_parser_preserves_heading_styles_as_markdown():
     assert "## 基础信息" in result.text
     assert "### 问题一" in result.text
     assert "当前岗位 | 高级后端工程师" in result.text
-    assert result.structured["content_list"][0]["locator"]["paragraph"] == 1
+    assert all("locator" not in item for item in result.structured["content_list"])
 
 
 def test_langchain_csv_loader_extracts_hris_fields():
@@ -48,8 +48,7 @@ def test_markdown_parser_preserves_headings_and_content():
     assert "项目复盘" in result.text
     first_item = result.structured["content_list"][0]
     assert first_item["type"] == "title"
-    assert first_item["locator"]["char_start"] == 0
-    assert first_item["locator"]["char_end"] > 0
+    assert "locator" not in first_item
 
 
 def test_pptx_parser_extracts_slide_text():
@@ -66,3 +65,21 @@ def test_xlsx_parser_returns_structured_sheets():
     assert result.parser_name == "openpyxl"
     assert result.structured["kind"] == "workbook"
     assert len(result.structured["sheets"]) == 2
+
+
+def test_transcript_segments_are_normalized_to_plain_text():
+    text, structured = transcript_segments_to_text(
+        [
+            {"start": 0.0, "end": 6.0, "text": "第一段"},
+            {"start": 6.0, "end": 10.0, "text": "第二段"},
+        ]
+    )
+
+    assert text == "第一段\n\n第二段"
+    assert "content_list" not in structured
+    assert structured["segments"][0]["start"] == 0.0
+
+def test_audio_transcript():
+    result = parse_document(first("audio/*.wav"))
+    assert result.parser_name == "faster_whisper_tiny"
+    assert "我" in result.text

@@ -44,6 +44,7 @@ services:
       retries: 20
 
   backend:
+    profiles: ["app"]
     image: talent-eval-agents-course-backend:latest
     build: ./backend
     env_file:
@@ -73,6 +74,7 @@ services:
         condition: service_healthy
 
   worker:
+    profiles: ["app"]
     image: talent-eval-agents-course-backend:latest
     build: ./backend
     env_file:
@@ -97,6 +99,7 @@ services:
         condition: service_started
 
   frontend:
+    profiles: ["app"]
     build: ./frontend
     ports:
       - "127.0.0.1:15173:80"

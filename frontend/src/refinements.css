@@ -5,11 +5,13 @@
 .side {
   width: 226px;
   padding: 20px 13px;
-  background: #10271f
+  background: #10271f;
+  transition: width .2s ease, padding .2s ease
 }
 
 main {
-  margin-left: 226px
+  margin-left: 226px;
+  transition: margin-left .2s ease
 }
 
 .brand img {
@@ -23,6 +25,24 @@ main {
 
 .brand {
   padding: 0 8px 22px
+}
+
+.sideToggle {
+  position: absolute;
+  top: 18px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #365247;
+  border-radius: 999px;
+  color: #d8e5df;
+  background: #17362c
+}
+
+.sideToggle svg {
+  width: 16px
 }
 
 .brand b {
@@ -95,6 +115,32 @@ main {
   display: block;
   margin: 3px 0 0 14px;
   color: #91a79d
+}
+
+.app.sidebarCollapsed .side {
+  width: 84px;
+  padding-inline: 10px
+}
+
+.app.sidebarCollapsed main {
+  margin-left: 84px
+}
+
+.app.sidebarCollapsed .brand {
+  justify-content: center;
+  padding-inline: 0
+}
+
+.app.sidebarCollapsed .brand div,
+.app.sidebarCollapsed .side nav button span,
+.app.sidebarCollapsed .env {
+  display: none
+}
+
+.app.sidebarCollapsed .side nav button {
+  justify-content: center;
+  gap: 0;
+  padding-inline: 0
 }
 
 .libraryHead {
@@ -184,7 +230,7 @@ main {
 
 .chunkControls {
   display: grid;
-  grid-template-columns: 1.4fr repeat(3, .8fr) auto;
+  grid-template-columns: minmax(0, 1.8fr) repeat(2, minmax(0, .8fr)) auto;
   align-items: end;
   gap: 9px;
   padding: 14px;
@@ -193,17 +239,21 @@ main {
   background: #f7faf8
 }
 
-.chunkControls label,
-.annotationForm label {
+.chunkHint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6
+}
+
+.chunkControls label {
   display: grid;
   gap: 5px;
   color: var(--muted);
   font-size: 11px
 }
 
-.chunkControls input,
-.chunkControls select,
-.annotationForm input {
+.chunkControls input {
   min-width: 0;
   padding: 8px;
   border: 1px solid var(--line);
@@ -277,54 +327,6 @@ main {
   white-space: normal
 }
 
-.annotationForm {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #f7faf8
-}
-
-.annotationForm>div {
-  display: grid;
-  gap: 8px
-}
-
-.annotationForm>.primary {
-  grid-column: 1 / -1
-}
-
-.metricGrid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 9px;
-  margin-top: 12px
-}
-
-.metricGrid div {
-  padding: 12px;
-  border: 1px solid #cfe1d8;
-  border-radius: 9px;
-  background: var(--mint)
-}
-
-.metricGrid small,
-.metricGrid b {
-  display: block
-}
-
-.metricGrid small {
-  color: var(--muted)
-}
-
-.metricGrid b {
-  margin-top: 4px;
-  color: var(--green);
-  font-size: 20px
-}
-
 .chunkError {
   color: #aa3d3d
 }
@@ -334,6 +336,10 @@ main {
 }
 
 @media (max-width: 900px) {
+  .sideToggle {
+    display: none
+  }
+
   .side {
     width: 68px
   }
@@ -360,13 +366,7 @@ main {
     max-width: calc(100vw - 150px)
   }
 
-  .chunkControls,
-  .annotationForm,
-  .metricGrid {
+  .chunkControls {
     grid-template-columns: 1fr
-  }
-
-  .annotationForm>.primary {
-    grid-column: auto
   }
 }

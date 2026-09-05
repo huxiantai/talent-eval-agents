@@ -6,22 +6,17 @@ import re
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.chunk_evaluation import AnnotatedQuestion, EvaluatedChunk, boundary_scores, content_coverage, evidence_scores
-from app.chunking import ChunkElement, ChunkPiece, ChunkStrategy, chunk_elements, semantic_chunk_text
-from app.config import get_settings
-from app.model_provider import get_embedding_model
+from app.chunking import ChunkElement, ChunkStrategy, chunk_elements
 from app.models import (
-    BoundaryAnnotation,
     ChunkingRun,
     ChunkingStatus,
     ChunkStrategyName,
     Document,
     DocumentChunk,
     DocumentVersion,
-    EvidenceQuestion,
     ParseArtifact,
     ParseJob,
     ParseStatus,
@@ -29,13 +24,8 @@ from app.models import (
 from app.object_store import ObjectStore
 
 
-def default_chunk_strategy() -> ChunkStrategy:
-    """Return the normalized default strategy for every material type.
-
-    Material-specific structure is expressed while parsing the source into
-    hierarchical Markdown rather than by selecting a different text splitter.
-    """
-    return ChunkStrategy.MARKDOWN
+def infer_chunk_strategy(elements: list[ChunkElement]) -> ChunkStrategy:
+    return ChunkStrategy.MARKDOWN if any(element.kind == "heading" for element in elements) else ChunkStrategy.RECURSIVE
 
 
 def parent_paths_for_heading(heading_path: list[str]) -> list[tuple[str, ...]]:
@@ -48,14 +38,27 @@ def content_element_ids(elements: list[ChunkElement]) -> list[str]:
 
 def _source_locator(item: dict, *, page: int | None = None) -> dict:
     locator = dict(item.get("locator") or {})
-    if locator:
+    if locator.get("kind") in {"page_region", "slide", "slide_region", "time_range"}:
         return locator
+    locator = {}
     bbox = item.get("bbox")
     if page is not None:
         locator = {"kind": "page_region", "page": page}
         if bbox is not None:
             locator["bbox"] = bbox
     return locator
+
+
+def _markdown_blocks(markdown: str) -> list[tuple[str, int, int]]:
+    blocks: list[tuple[str, int, int]] = []
+    for match in re.finditer(r"(?:^|\n\s*\n)(.*?)(?=\n\s*\n|\Z)", markdown, flags=re.DOTALL):
+        raw = match.group(1)
+        block = raw.strip()
+        if not block:
+            continue
+        start = match.start(1) + len(raw) - len(raw.lstrip())
+        blocks.append((block, start, start + len(block)))
+    return blocks
 
 
 def elements_from_artifacts(markdown: str, structured: dict) -> list[ChunkElement]:
@@ -68,6 +71,7 @@ def elements_from_artifacts(markdown: str, structured: dict) -> list[ChunkElemen
                 "locator": {
                     "kind": "time_range",
                     "segment": index,
+                    "speaker": item.get("speaker"),
                     "timestamp_start": item.get("start"),
                     "timestamp_end": item.get("end"),
                 },
@@ -84,10 +88,10 @@ def elements_from_artifacts(markdown: str, structured: dict) -> list[ChunkElemen
                 source_items.append((index, item, text))
 
     if markdown.strip():
-        blocks = [block.strip() for block in re.split(r"\n\s*\n", markdown) if block.strip()]
+        blocks = _markdown_blocks(markdown)
         used_sources: set[int] = set()
         result: list[ChunkElement] = []
-        for block_index, block in enumerate(blocks, start=1):
+        for block_index, (block, markdown_start, markdown_end) in enumerate(blocks, start=1):
             normalized_block = re.sub(r"^#{1,6}\s+", "", block).strip()
             source = next(
                 (
@@ -108,6 +112,7 @@ def elements_from_artifacts(markdown: str, structured: dict) -> list[ChunkElemen
                 element_id = f"md-e{block_index}"
             is_heading = bool(re.match(r"^#{1,6}\s+", block)) or source_item.get("type") in {"title", "heading"}
             locator = _source_locator(source_item, page=page)
+            speaker = locator.get("speaker") or source_item.get("speaker")
             result.append(
                 ChunkElement(
                     id=element_id,
@@ -116,16 +121,21 @@ def elements_from_artifacts(markdown: str, structured: dict) -> list[ChunkElemen
                     kind="heading" if is_heading else str(source_item.get("type") or "text"),
                     timestamp_start=locator.get("timestamp_start"),
                     timestamp_end=locator.get("timestamp_end"),
+                    speaker=str(speaker) if speaker else None,
+                    markdown_start=markdown_start,
+                    markdown_end=markdown_end,
                     source_locator=locator,
                 )
             )
         return result
 
     result = []
+    markdown_cursor = 0
     for index, item, text in source_items:
         page = int(item["page_idx"]) + 1 if item.get("page_idx") is not None else None
         kind = "heading" if item.get("type") in {"title", "heading"} else str(item.get("type") or "text")
         locator = _source_locator(item, page=page)
+        speaker = locator.get("speaker") or item.get("speaker")
         result.append(
             ChunkElement(
                 id=f"p{page}-e{index}" if page is not None else f"src-e{index}",
@@ -134,9 +144,13 @@ def elements_from_artifacts(markdown: str, structured: dict) -> list[ChunkElemen
                 kind=kind,
                 timestamp_start=locator.get("timestamp_start"),
                 timestamp_end=locator.get("timestamp_end"),
+                speaker=str(speaker) if speaker else None,
+                markdown_start=markdown_cursor,
+                markdown_end=markdown_cursor + len(text),
                 source_locator=locator,
             )
         )
+        markdown_cursor += len(text) + 2
     return result
 
 
@@ -162,67 +176,29 @@ def _load_parse_input(db: Session, store: ObjectStore, version_id: UUID) -> tupl
     return job, markdown, structured
 
 
-def source_elements_for_version(db: Session, store: ObjectStore, version_id: UUID) -> list[ChunkElement]:
-    _, markdown, structured = _load_parse_input(db, store, version_id)
-    return elements_from_artifacts(markdown, structured)
-
-
-def _semantic_pieces(elements: list[ChunkElement], threshold: float) -> list[ChunkPiece]:
-    embeddings = get_embedding_model()
-    if embeddings is None:
-        raise ValueError("DASHSCOPE_API_KEY 未配置，无法执行语义分片")
-    text = "\n".join(element.text for element in elements)
-    pieces = semantic_chunk_text(
-        text,
-        embeddings=embeddings,
-        breakpoint_threshold_type="percentile",
-        breakpoint_threshold_amount=threshold,
-    )
-    for piece in pieces:
-        matched_elements = [element for element in elements if element.text in piece.content]
-        piece.element_ids = [element.id for element in matched_elements]
-        piece.source_locators = [element.source_locator for element in matched_elements if element.source_locator]
-        pages = [element.page for element in matched_elements if element.page is not None]
-        starts = [element.timestamp_start for element in matched_elements if element.timestamp_start is not None]
-        ends = [element.timestamp_end for element in matched_elements if element.timestamp_end is not None]
-        piece.page_start = min(pages) if pages else None
-        piece.page_end = max(pages) if pages else None
-        piece.timestamp_start = min(starts) if starts else None
-        piece.timestamp_end = max(ends) if ends else None
-    return pieces
-
-
 def create_chunking_run(
     db: Session,
     store: ObjectStore,
     document: Document,
     version: DocumentVersion,
     *,
-    strategy: ChunkStrategy,
     chunk_size: int,
     chunk_overlap: int,
-    semantic_threshold: float = 90,
 ) -> ChunkingRun:
     parse_job, markdown, structured = _load_parse_input(db, store, version.id)
-    settings = get_settings()
+    elements = elements_from_artifacts(markdown, structured)
+    strategy = infer_chunk_strategy(elements)
     run = ChunkingRun(
         parse_job_id=parse_job.id,
         strategy=ChunkStrategyName(strategy.value),
         status=ChunkingStatus.RUNNING,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        embedding_model=settings.embedding_model if strategy == ChunkStrategy.SEMANTIC else None,
-        configuration={"semantic_threshold": semantic_threshold},
     )
     db.add(run)
     db.flush()
     try:
-        elements = elements_from_artifacts(markdown, structured)
-        pieces = (
-            _semantic_pieces(elements, semantic_threshold)
-            if strategy == ChunkStrategy.SEMANTIC
-            else chunk_elements(elements, strategy=strategy, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-        )
+        pieces = chunk_elements(elements, strategy=strategy, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         children: list[DocumentChunk] = []
         parent_by_path: dict[tuple[str, ...], DocumentChunk] = {}
         for position, piece in enumerate(pieces):
@@ -244,6 +220,8 @@ def create_chunking_run(
                         element_ids=[],
                         heading_path=list(path_key),
                         parent_chunk_id=parent.id if parent else None,
+                        markdown_start=None,
+                        markdown_end=None,
                         source_locators=[],
                     )
                     db.add(current_parent)
@@ -268,6 +246,8 @@ def create_chunking_run(
                 page_end=piece.page_end,
                 timestamp_start=piece.timestamp_start,
                 timestamp_end=piece.timestamp_end,
+                markdown_start=piece.markdown_start,
+                markdown_end=piece.markdown_end,
                 source_locators=piece.source_locators,
             )
             db.add(child)
@@ -275,6 +255,10 @@ def create_chunking_run(
             for current_parent in parents_for_piece:
                 current_parent.content = f"{current_parent.content}\n\n{child.content}".strip()
                 current_parent.element_ids = list(dict.fromkeys([*current_parent.element_ids, *child.element_ids]))
+                if child.markdown_start is not None:
+                    current_parent.markdown_start = min(current_parent.markdown_start, child.markdown_start) if current_parent.markdown_start is not None else child.markdown_start
+                if child.markdown_end is not None:
+                    current_parent.markdown_end = max(current_parent.markdown_end, child.markdown_end) if current_parent.markdown_end is not None else child.markdown_end
                 existing_locators = {json.dumps(item, ensure_ascii=False, sort_keys=True) for item in current_parent.source_locators}
                 current_parent.source_locators = [
                     *current_parent.source_locators,
@@ -314,70 +298,3 @@ def latest_chunks(db: Session, version_id: UUID) -> tuple[ChunkingRun | None, li
         select(DocumentChunk).where(DocumentChunk.chunking_run_id == run.id).order_by(DocumentChunk.chunk_level, DocumentChunk.position)
     ).all()
     return run, chunks
-
-
-def save_annotations(
-    db: Session,
-    version_id: UUID,
-    *,
-    boundaries: list[dict],
-    questions: list[dict],
-    annotator: str,
-) -> None:
-    db.execute(delete(BoundaryAnnotation).where(BoundaryAnnotation.document_version_id == version_id))
-    db.execute(delete(EvidenceQuestion).where(EvidenceQuestion.document_version_id == version_id))
-    db.add_all(
-        BoundaryAnnotation(
-            document_version_id=version_id,
-            after_element_id=item["after_element_id"],
-            after_position=item["after_position"],
-            reason=item.get("reason"),
-            annotator=annotator,
-        )
-        for item in boundaries
-    )
-    db.add_all(
-        EvidenceQuestion(
-            document_version_id=version_id,
-            question=item["question"],
-            required_element_ids=item["required_element_ids"],
-            annotator=annotator,
-        )
-        for item in questions
-    )
-    db.commit()
-
-
-def evaluate_latest_chunks(db: Session, version_id: UUID, source_elements: list[ChunkElement]) -> dict:
-    _, stored = latest_chunks(db, version_id)
-    child_chunks = [chunk for chunk in stored if chunk.chunk_level == "child"]
-    evaluated = [EvaluatedChunk(str(chunk.id), chunk.element_ids, str(chunk.parent_chunk_id) if chunk.parent_chunk_id else None) for chunk in child_chunks]
-    boundaries = db.scalars(select(BoundaryAnnotation).where(BoundaryAnnotation.document_version_id == version_id)).all()
-    questions = db.scalars(select(EvidenceQuestion).where(EvidenceQuestion.document_version_id == version_id)).all()
-    positions = {element.id: index for index, element in enumerate(source_elements, start=1)}
-    predicted = sorted(
-        {
-            max(positions[element_id] for element_id in chunk.element_ids if element_id in positions)
-            for chunk in child_chunks[:-1]
-            if any(element_id in positions for element_id in chunk.element_ids)
-        }
-    )
-    coverage = content_coverage(content_element_ids(source_elements), evaluated)
-    boundary = boundary_scores([item.after_position for item in boundaries], predicted, tolerance=1)
-    evidence = evidence_scores(
-        [AnnotatedQuestion(str(item.id), item.required_element_ids) for item in questions],
-        evaluated,
-    )
-    return {
-        "coverage": coverage.coverage,
-        "duplicate_rate": coverage.duplicate_rate,
-        "missing_element_ids": coverage.missing_element_ids,
-        "boundary_precision": boundary.precision,
-        "boundary_recall": boundary.recall,
-        "boundary_f1": boundary.f1,
-        "evidence_completeness_rate": evidence.completeness_rate,
-        "average_dispersion": evidence.average_dispersion,
-        "complete_questions": evidence.complete_count,
-        "fragmented_questions": evidence.fragmented_count,
-        "missing_questions": evidence.missing_count,
-    }

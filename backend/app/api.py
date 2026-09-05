@@ -10,13 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.chunk_service import (
     create_chunking_run,
-    evaluate_latest_chunks,
     latest_chunks,
-    save_annotations,
-    source_elements_for_version,
-    default_chunk_strategy,
 )
-from app.chunking import ChunkStrategy
 from app.config import get_settings
 from app.database import get_db
 from app.models import Document, DocumentVersion, EmployeeProfile, FileObject, KnowledgeBase, ParseArtifact, ParseJob
@@ -46,27 +41,8 @@ class KnowledgeBaseInput(BaseModel):
 
 
 class ChunkingInput(BaseModel):
-    strategy: str = "auto"
     chunk_size: int = Field(default=800, ge=100, le=8000)
     chunk_overlap: int = Field(default=100, ge=0, le=2000)
-    semantic_threshold: float = Field(default=90, ge=0, le=100)
-
-
-class BoundaryInput(BaseModel):
-    after_element_id: str
-    after_position: int = Field(ge=1)
-    reason: str | None = None
-
-
-class EvidenceQuestionInput(BaseModel):
-    question: str = Field(min_length=1)
-    required_element_ids: list[str] = Field(min_length=1)
-
-
-class ChunkAnnotationInput(BaseModel):
-    annotator: str = "course-annotator"
-    boundaries: list[BoundaryInput] = Field(default_factory=list)
-    questions: list[EvidenceQuestionInput] = Field(default_factory=list)
 
 
 def employee_json(item: EmployeeProfile, material_count: int = 0):
@@ -185,11 +161,10 @@ def get_document_chunks(document_id: UUID, db: Session = Depends(get_db)):
     return {
         "run": {
             "id": run.id,
-            "strategy": run.strategy,
+            "strategy": run.strategy.value,
             "status": run.status,
             "chunk_size": run.chunk_size,
             "chunk_overlap": run.chunk_overlap,
-            "embedding_model": run.embedding_model,
             "chunker_version": run.chunker_version,
             "created_at": run.created_at,
         },
@@ -209,6 +184,8 @@ def get_document_chunks(document_id: UUID, db: Session = Depends(get_db)):
                 "page_end": chunk.page_end,
                 "timestamp_start": chunk.timestamp_start,
                 "timestamp_end": chunk.timestamp_end,
+                "markdown_start": chunk.markdown_start,
+                "markdown_end": chunk.markdown_end,
                 "source_locators": chunk.source_locators,
             }
             for chunk in chunks
@@ -227,54 +204,17 @@ def create_document_chunks(document_id: UUID, payload: ChunkingInput, db: Sessio
     if payload.chunk_overlap >= payload.chunk_size:
         raise HTTPException(422, "chunk_overlap 必须小于 chunk_size")
     try:
-        strategy = default_chunk_strategy() if payload.strategy == "auto" else ChunkStrategy(payload.strategy)
-    except ValueError as exc:
-        raise HTTPException(422, "不支持的切片策略") from exc
-    try:
         run = create_chunking_run(
             db,
             ObjectStore(),
             document,
             version,
-            strategy=strategy,
             chunk_size=payload.chunk_size,
             chunk_overlap=payload.chunk_overlap,
-            semantic_threshold=payload.semantic_threshold,
         )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    return {"id": run.id, "strategy": run.strategy, "status": run.status}
-
-
-@router.post("/documents/{document_id}/chunk-annotations", status_code=201)
-def create_chunk_annotations(document_id: UUID, payload: ChunkAnnotationInput, db: Session = Depends(get_db)):
-    version = current_version(db, document_id)
-    if not version:
-        raise HTTPException(404, "文档版本不存在")
-    save_annotations(
-        db,
-        version.id,
-        boundaries=[item.model_dump() for item in payload.boundaries],
-        questions=[item.model_dump() for item in payload.questions],
-        annotator=payload.annotator,
-    )
-    return {"boundary_count": len(payload.boundaries), "question_count": len(payload.questions)}
-
-
-@router.get("/documents/{document_id}/chunk-evaluation")
-def get_chunk_evaluation(document_id: UUID, db: Session = Depends(get_db)):
-    version = current_version(db, document_id)
-    if not version:
-        raise HTTPException(404, "文档版本不存在")
-    _, chunks = latest_chunks(db, version.id)
-    if not chunks:
-        raise HTTPException(409, "文档尚未生成切片")
-    store = ObjectStore()
-    try:
-        elements = source_elements_for_version(db, store, version.id)
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    return evaluate_latest_chunks(db, version.id, elements)
+    return {"id": run.id, "strategy": run.strategy.value, "status": run.status}
 
 
 @router.post("/jobs/{job_id}/retry")

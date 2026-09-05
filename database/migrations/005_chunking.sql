@@ -4,7 +4,7 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 DO $$ BEGIN
-    CREATE TYPE chunk_strategy AS ENUM ('fixed', 'recursive', 'markdown', 'semantic', 'interview_qa');
+    CREATE TYPE chunk_strategy AS ENUM ('recursive', 'markdown');
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
@@ -16,8 +16,6 @@ CREATE TABLE IF NOT EXISTS chunking_runs (
     chunk_size INTEGER NOT NULL CHECK (chunk_size > 0),
     chunk_overlap INTEGER NOT NULL DEFAULT 0 CHECK (chunk_overlap >= 0),
     chunker_version VARCHAR(64) NOT NULL DEFAULT 'lesson-5-v1',
-    embedding_model VARCHAR(128),
-    configuration JSONB NOT NULL DEFAULT '{}'::jsonb,
     error_message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at TIMESTAMPTZ
@@ -45,6 +43,8 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     page_end INTEGER,
     timestamp_start DOUBLE PRECISION,
     timestamp_end DOUBLE PRECISION,
+    markdown_start INTEGER,
+    markdown_end INTEGER,
     source_locators JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (chunking_run_id, stable_key)
@@ -53,22 +53,23 @@ CREATE TABLE IF NOT EXISTS document_chunks (
 CREATE INDEX IF NOT EXISTS idx_document_chunks_version ON document_chunks (document_version_id, position);
 CREATE INDEX IF NOT EXISTS idx_document_chunks_candidate ON document_chunks (candidate_id, document_type);
 
-CREATE TABLE IF NOT EXISTS chunk_boundary_annotations (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    document_version_id UUID NOT NULL REFERENCES document_versions(id),
-    after_element_id VARCHAR(128) NOT NULL,
-    after_position INTEGER NOT NULL CHECK (after_position > 0),
-    reason VARCHAR(255),
-    annotator VARCHAR(128) NOT NULL DEFAULT 'course-annotator',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (document_version_id, after_element_id, annotator)
-);
+ALTER TABLE document_chunks
+ADD COLUMN IF NOT EXISTS source_locators JSONB NOT NULL DEFAULT '[]'::jsonb,
+ADD COLUMN IF NOT EXISTS markdown_start INTEGER,
+ADD COLUMN IF NOT EXISTS markdown_end INTEGER;
 
-CREATE TABLE IF NOT EXISTS chunk_evidence_questions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    document_version_id UUID NOT NULL REFERENCES document_versions(id),
-    question TEXT NOT NULL,
-    required_element_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-    annotator VARCHAR(128) NOT NULL DEFAULT 'course-annotator',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+ALTER TABLE chunking_runs
+DROP COLUMN IF EXISTS embedding_model,
+DROP COLUMN IF EXISTS configuration;
+
+COMMENT ON COLUMN document_chunks.source_locators IS
+'原文件辅助定位集合，可保存页码与 bbox、幻灯片与 shape 或音频时间范围';
+
+COMMENT ON COLUMN document_chunks.markdown_start IS
+'Chunk 在归一化 Markdown 中的起始字符偏移';
+
+COMMENT ON COLUMN document_chunks.markdown_end IS
+'Chunk 在归一化 Markdown 中的结束字符偏移';
+
+DROP TABLE IF EXISTS chunk_boundary_annotations;
+DROP TABLE IF EXISTS chunk_evidence_questions;

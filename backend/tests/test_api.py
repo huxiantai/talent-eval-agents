@@ -12,12 +12,12 @@ def test_health_endpoint_reports_service_ready():
     assert response.json() == {"service": "talent-document-api", "status": "ok"}
 
 
-def test_openapi_exposes_chunking_and_annotation_workflow():
+def test_openapi_exposes_only_the_lesson_5_chunking_workflow():
     client = TestClient(create_app())
 
     paths = client.get("/openapi.json").json()["paths"]
 
     assert "/api/documents/{document_id}/chunks" in paths
     assert set(paths["/api/documents/{document_id}/chunks"]) == {"get", "post"}
-    assert "/api/documents/{document_id}/chunk-annotations" in paths
-    assert "/api/documents/{document_id}/chunk-evaluation" in paths
+    assert "/api/documents/{document_id}/chunk-annotations" not in paths
+    assert "/api/documents/{document_id}/chunk-evaluation" not in paths

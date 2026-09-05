@@ -47,9 +47,14 @@ def test_settings_include_dashscope_models():
 
 
 def test_chunking_enums_cover_persisted_strategy_and_status():
-    assert ChunkStrategyName.SEMANTIC.value == "semantic"
+    assert {item.value for item in ChunkStrategyName} == {"markdown", "recursive"}
     assert ChunkingStatus.SUCCEEDED.value == "succeeded"
 
 
 def test_document_chunk_has_unified_source_locators_field():
     assert "source_locators" in DocumentChunk.__table__.columns
+
+
+def test_document_chunk_has_universal_markdown_offset_fields():
+    assert "markdown_start" in DocumentChunk.__table__.columns
+    assert "markdown_end" in DocumentChunk.__table__.columns
