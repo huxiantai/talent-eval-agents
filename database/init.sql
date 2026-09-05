@@ -4,6 +4,7 @@ CREATE TYPE document_status AS ENUM ('active', 'inactive', 'deleted');
 CREATE TYPE parse_status AS ENUM ('pending', 'running', 'succeeded', 'partially_succeeded', 'failed');
 CREATE TYPE chunking_status AS ENUM ('pending', 'running', 'succeeded', 'failed');
 CREATE TYPE chunk_strategy AS ENUM ('recursive', 'markdown');
+CREATE TYPE index_status AS ENUM ('pending', 'running', 'succeeded', 'failed');
 
 CREATE TABLE employee_profiles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -164,6 +165,22 @@ CREATE TABLE document_chunks (
 CREATE INDEX idx_document_chunks_version ON document_chunks (document_version_id, position);
 CREATE INDEX idx_document_chunks_candidate ON document_chunks (candidate_id, document_type);
 
+CREATE TABLE evidence_index_jobs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_version_id UUID NOT NULL REFERENCES document_versions(id),
+    status index_status NOT NULL DEFAULT 'pending',
+    embedding_model VARCHAR(128) NOT NULL,
+    collection_name VARCHAR(128) NOT NULL,
+    indexed_count INTEGER NOT NULL DEFAULT 0 CHECK (indexed_count >= 0),
+    retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+    error_message TEXT,
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_evidence_index_jobs_version_created
+ON evidence_index_jobs (document_version_id, created_at DESC);
 COMMENT ON TABLE documents IS '业务层逻辑文档，同一文档可以有多个文件版本';
 COMMENT ON TABLE employee_profiles IS '员工花名册结构化基础信息';
 COMMENT ON TABLE knowledge_bases IS '档案资料库中的知识库';
@@ -173,3 +190,4 @@ COMMENT ON TABLE parse_jobs IS '文件解析任务及状态变化';
 COMMENT ON TABLE parse_artifacts IS 'Markdown、JSON、图片、转写等解析产物索引';
 COMMENT ON TABLE chunking_runs IS '一次可复现的文档切片运行及其自动判定策略';
 COMMENT ON TABLE document_chunks IS '带来源定位、父子关系、相邻关系和权限信息的人才证据单元';
+COMMENT ON TABLE evidence_index_jobs IS 'PostgreSQL 与 Milvus 之间的证据索引任务及一致性状态';

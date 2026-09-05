@@ -9,6 +9,7 @@
 | `backend/` | FastAPI 后端、uv 环境、依赖锁、解析器、数据模型与测试 |
 | `database/init.sql` | PostgreSQL 完整建表 SQL |
 | `database/migrations/005_chunking.sql` | 第 4 课到第 5 课的唯一幂等增量迁移 |
+| `database/migrations/007_milvus_evidence_index.sql` | 第 6 课 Milvus 索引任务表的幂等增量迁移 |
 | `frontend/` | React 前端 |
 | `docker-compose.yml` | 默认启动 PostgreSQL、MinIO、Redis；`app` profile 启动 backend、worker、frontend |
 
@@ -101,6 +102,9 @@ docker compose -p talent-eval-agents-course --profile app up -d --build
 | `POST /api/documents/{id}/parse` | 创建异步解析任务 |
 | `GET /api/documents/{id}/chunks` | 查询最新一次成功切片及 Parent-Child 关系 |
 | `POST /api/documents/{id}/chunks` | 按材料结构自动执行 Markdown 结构化切分或纯文本递归切分 |
+| `POST /api/documents/{id}/evidence-index` | 创建当前文档版本的异步 Milvus 索引任务 |
+| `POST /api/evidence/search` | 按租户、权限范围和业务条件检索人才证据 |
+| `POST /api/index-jobs/{id}/retry` | 为失败的 Milvus 索引任务创建新的幂等重试任务 |
 
 ## Chunk 模块
 
@@ -153,11 +157,71 @@ docker compose -p talent-eval-agents-course up -d postgres
 ```bash
 docker compose -p talent-eval-agents-course exec -T postgres \
   psql -U talent -d talent_docs -v ON_ERROR_STOP=1 -f /dev/stdin \
-  < database/migrations/005_chunking.sql
+ < database/migrations/005_chunking.sql
 ```
 迁移脚本使用 `IF NOT EXISTS` 与重复对象处理，可以在已执行旧版 `005` 的开发环境中再次执行。
 
 全新环境由 `database/init.sql` 直接创建最新结构，不需要再执行增量迁移
+
+## Milvus 证据索引
+
+Milvus 作为独立向量检索服务，PostgreSQL 继续保存文档、版本、Chunk 和索引任务状态
+
+| 路径 | 用途 |
+|---|---|
+| `backend/app/milvus_store.py` | Collection Schema、HNSW、Upsert、标量过滤、搜索与按版本删除 |
+| `backend/app/evidence_index_service.py` | Chunk 向量化、Evidence Record 映射、索引任务执行与状态更新 |
+| `backend/scripts/verify_milvus.py` | 使用确定性向量验证 Collection、Upsert、权限过滤和 HNSW 搜索 |
+| `backend/tests/test_milvus_store.py` | Milvus 存储适配器的行为回归测试 |
+| `backend/tests/test_evidence_index_service.py` | Chunk 到 Evidence Record 的转换与索引编排测试 |
+
+开发环境使用 Milvus Standalone 2.6.17、etcd 和已有 MinIO
+
+- 宿主机 Milvus gRPC 端口：`19531`
+- 宿主机 Milvus 健康检查端口：`19091`
+- 容器内 backend 与 worker 通过 `http://milvus:19530` 访问
+
+先确保 PostgreSQL 已经通过同一个项目名启动：
+
+```bash
+docker compose -p talent-eval-agents-course up -d postgres
+```
+
+然后在代码仓库根目录执行：
+
+```bash
+docker compose -p talent-eval-agents-course exec -T postgres \
+  psql -U talent -d talent_docs -v ON_ERROR_STOP=1 -f /dev/stdin \
+  < database/migrations/007_milvus_evidence_index.sql
+```
+
+全新环境由 `database/init.sql` 直接创建最新结构，不需要再执行增量迁移
+
+启动服务并执行 Milvus 独立验收：
+
+```bash
+docker compose -p talent-eval-agents-course up -d
+cd backend
+uv run python -m scripts.verify_milvus
+```
+
+验收脚本的实际运行结果
+
+```json
+{"collection": "lesson6_verification_v1", "upserted": 2, "matched": 1, "top_candidate": "C001", "top_score": 1.0, "permission_scope": "hr_private"}
+```
+
+Collection 默认使用 1024 维向量、COSINE 距离和 HNSW 索引
+
+- `M=16`
+
+- `efConstruction=128`
+
+- 查询默认 `ef=80`
+
+- 常规查询默认使用 Bounded consistency
+
+- 写后读验收使用 Strong consistency
 
 ## 验证
 
@@ -167,16 +231,7 @@ uv sync --dev
 uv run pytest tests -q
 ```
 
-当前第 5 课回归结果以本次本地 `pytest` 结果为准
-
-## MinerU 本地服务
-
-macOS 使用宿主机 uv 环境启动 MinerU，避免把内部材料发送给外部解析接口
-
-```bash
-uv sync --project backend/mineru-runtime
-uv run --project backend/mineru-runtime mineru-api --host 127.0.0.1 --port 18001
-```
+当前回归结果以本次本地 `pytest` 结果为准
 
 ## 服务日志
 
@@ -199,5 +254,7 @@ backend/logs/worker-error-YYYY-MM-DD.log
 - Redis：`16379`
 - MinIO API：`19000`
 - MinIO Console：`19001`
+- Milvus gRPC：`19531`
+- Milvus Health：`19091`
 - Backend API：`18080`
 - Frontend：`15173`

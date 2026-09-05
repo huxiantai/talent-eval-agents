@@ -6,6 +6,7 @@ from redis.exceptions import TimeoutError
 
 from app.config import get_settings
 from app.database import SessionLocal
+from app.evidence_index_service import run_index_job
 from app.logging_config import configure_logging
 from app.object_store import ObjectStore
 from app.services import parse_version
@@ -18,10 +19,11 @@ def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_dir, settings.service_name)
     redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_timeout=15)
-    logger.info("worker_started queue=talent:parse:queue")
+    queues = ["talent:parse:queue", "talent:index:queue"]
+    logger.info("worker_started queues=%s", ",".join(queues))
     while True:
         try:
-            item = redis.blpop("talent:parse:queue", timeout=5)
+            item = redis.blpop(queues, timeout=5)
         except TimeoutError:
             continue
         except Exception:
@@ -29,11 +31,16 @@ def run() -> None:
             raise
         if not item:
             continue
-        job_id, version_id = item[1].split(":", 1)
-        logger.info("worker_job_received job_id=%s version_id=%s", job_id, version_id)
+        queue_name, payload = item
+        job_id, version_id = payload.split(":", 1)
+        logger.info("worker_job_received queue=%s job_id=%s version_id=%s", queue_name, job_id, version_id)
         with SessionLocal() as db:
-            job = parse_version(db, ObjectStore(), UUID(version_id), UUID(job_id))
-            logger.info("worker_job_completed job_id=%s status=%s parser=%s", job.id, job.status, job.parser_name)
+            if queue_name == "talent:index:queue":
+                job = run_index_job(db, UUID(job_id), UUID(version_id))
+                logger.info("worker_index_job_completed job_id=%s status=%s indexed_count=%s", job.id, job.status, job.indexed_count)
+            else:
+                job = parse_version(db, ObjectStore(), UUID(version_id), UUID(job_id))
+                logger.info("worker_parse_job_completed job_id=%s status=%s parser=%s", job.id, job.status, job.parser_name)
 
 
 if __name__ == "__main__":
