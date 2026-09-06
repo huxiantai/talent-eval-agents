@@ -17,8 +17,10 @@ from app.database import get_db
 from app.document_cleanup import delete_document_bundle
 from app.document_pipeline import queue_index_job, queue_parse_job, summarize_pipeline_status
 from app.evidence_index_service import get_evidence_store
+from app.hybrid_search_service import hybrid_search_evidence as hybrid_search_evidence_service
 from app.milvus_store import EvidenceFilter
 from app.model_provider import get_embedding_model
+from app.reranker import get_reranker
 from app.models import (
     ChunkingRun,
     Document,
@@ -67,6 +69,16 @@ class EvidenceSearchInput(BaseModel):
     document_types: list[str] | None = None
     limit: int = Field(default=10, ge=1, le=100)
     ef: int = Field(default=80, ge=10, le=1000)
+
+
+class HybridSearchInput(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    candidate_ids: list[str] | None = None
+    document_types: list[str] | None = None
+    limit: int = Field(default=10, ge=1, le=100)
+    ef: int = Field(default=80, ge=10, le=1000)
+    rrf_k: int = Field(default=60, ge=1, le=1000)
+    rerank_top_n: int = Field(default=20, ge=1, le=100)
 
 
 class DeleteDocumentsInput(BaseModel):
@@ -127,6 +139,43 @@ def build_document_pipeline_payload(db: Session, document_id: UUID) -> dict[str,
         "parse_status": snapshot.parse_status,
         "chunk_status": snapshot.chunk_status,
         "index_status": snapshot.index_status,
+    }
+
+
+def enrich_evidence_context(db: Session, results):
+    version_ids = [
+        UUID(value)
+        for item in results
+        for value in [item.metadata.get("document_version_id")]
+        if value
+    ] if db else []
+    versions = db.scalars(select(DocumentVersion).where(DocumentVersion.id.in_(version_ids))).all() if db and version_ids else []
+    version_by_id = {str(item.id): item for item in versions}
+    documents = db.scalars(select(Document).where(Document.id.in_([item.document_id for item in versions]))).all() if db and versions else []
+    document_by_id = {item.id: item for item in documents}
+    employees = db.scalars(select(EmployeeProfile).where(EmployeeProfile.id.in_([item.employee_id for item in documents if item.employee_id]))).all() if db and documents else []
+    employee_by_id = {item.id: item for item in employees}
+    return version_by_id, document_by_id, employee_by_id
+
+
+def evidence_item_json(item, version_by_id, document_by_id, employee_by_id, *, score: float):
+    version = version_by_id.get(str(item.metadata.get("document_version_id")))
+    document = document_by_id.get(version.document_id) if version else None
+    employee = employee_by_id.get(document.employee_id) if document and document.employee_id else None
+    return {
+        "chunk_id": item.chunk_id,
+        "candidate_id": item.candidate_id,
+        "candidate_name": employee.name if employee else item.candidate_id,
+        "document_id": str(document.id) if document else None,
+        "document_title": document.title if document else None,
+        "material_no": document.material_no if document else None,
+        "document_type": item.metadata.get("document_type"),
+        "permission_scope": item.metadata.get("permission_scope"),
+        "page_start": item.metadata.get("page_start"),
+        "page_end": item.metadata.get("page_end"),
+        "content": item.content,
+        "score": score,
+        "metadata": item.metadata,
     }
 
 
@@ -422,6 +471,49 @@ def search_evidence(
             }
         )
     return items
+
+
+@router.post("/evidence/hybrid-search")
+def hybrid_search_evidence(
+    payload: HybridSearchInput,
+    x_tenant_id: str = Header(...),
+    x_permission_scopes: str = Header(...),
+    db: Session | None = Depends(get_db),
+):
+    permission_scopes = [value.strip() for value in x_permission_scopes.split(",") if value.strip()]
+    if not permission_scopes:
+        raise HTTPException(403, "缺少可用的证据权限范围")
+    embedder = get_embedding_model()
+    if embedder is None:
+        raise HTTPException(503, "Embedding 服务未配置")
+    reranker = get_reranker()
+    if reranker is None:
+        raise HTTPException(503, "Rerank 服务未配置")
+    try:
+        results = hybrid_search_evidence_service(
+            query=payload.query,
+            filters=EvidenceFilter(
+                tenant_id=x_tenant_id,
+                permission_scopes=permission_scopes,
+                candidate_ids=payload.candidate_ids,
+                document_types=payload.document_types,
+            ),
+            store=get_evidence_store(),
+            embedder=embedder,
+            reranker=reranker,
+            limit=payload.limit,
+            ef=payload.ef,
+            rrf_k=payload.rrf_k,
+            rerank_top_n=payload.rerank_top_n,
+        )
+    except Exception as exc:
+        logger.exception("hybrid_search_failed tenant_id=%s", x_tenant_id)
+        raise HTTPException(503, f"混合检索失败: {exc}") from exc
+    version_by_id, document_by_id, employee_by_id = enrich_evidence_context(db, results)
+    return [
+        evidence_item_json(item, version_by_id, document_by_id, employee_by_id, score=item.rerank_score)
+        for item in results
+    ]
 
 
 @router.post("/jobs/{job_id}/retry")

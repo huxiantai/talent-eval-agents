@@ -73,6 +73,9 @@ def test_run_index_job_marks_job_succeeded_and_updates_index_count(monkeypatch):
     fake_db = FakeSession(job=job, version=version, document=document, run_id=uuid4(), chunks=chunks)
 
     class Store:
+        def ensure_collection(self):
+            return None
+
         def delete_version(self, **kwargs):
             return None
 
@@ -152,6 +155,9 @@ def test_run_index_job_rebuilds_version_index_before_upsert(monkeypatch):
     seen: dict[str, object] = {}
 
     class Store:
+        def ensure_collection(self):
+            return None
+
         def delete_version(self, *, tenant_id, document_version_id):
             seen["tenant_id"] = tenant_id
             seen["document_version_id"] = document_version_id

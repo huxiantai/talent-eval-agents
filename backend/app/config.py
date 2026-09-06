@@ -19,9 +19,11 @@ class Settings(BaseSettings):
     chat_model: str = "qwen-plus"
     embedding_model: str = "text-embedding-v3"
     embedding_dimension: int = 1024
+    rerank_model: str = "gte-rerank-v2"
+    rerank_top_n: int = 20
     milvus_uri: str = "http://127.0.0.1:19531"
     milvus_token: str = "root:Milvus"
-    milvus_collection: str = "talent_evidence_v1"
+    milvus_collection: str = "talent_evidence_v2"
     log_dir: str = "logs"
     service_name: str = "backend"
 

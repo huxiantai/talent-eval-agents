@@ -104,7 +104,8 @@ docker compose -p talent-eval-agents-course --profile app up -d --build
 | `GET /api/documents/{id}/chunks` | 查询最新一次成功切片及 Parent-Child 关系 |
 | `POST /api/documents/{id}/chunks` | 按材料结构自动执行 Markdown 结构化切分或纯文本递归切分 |
 | `POST /api/documents/{id}/evidence-index` | 为当前文档版本手动创建异步 Milvus 索引任务 |
-| `POST /api/evidence/search` | 按租户、权限范围和业务条件检索人才证据，并返回来源材料与候选人上下文 |
+| `POST /api/evidence/search` | 按租户、权限范围和业务条件检索人才证据，并返回来源材料与候选人上下文（纯向量） |
+| `POST /api/evidence/hybrid-search` | 稠密 + BM25 双路召回、RRF 融合、Rerank 精排的证据检索 |
 | `POST /api/index-jobs/{id}/retry` | 为失败的 Milvus 索引任务创建新的幂等重试任务 |
 
 ## Chunk 模块
@@ -227,6 +228,35 @@ Collection 默认使用 1024 维向量、COSINE 距离和 HNSW 索引
 - 常规查询默认使用 Bounded consistency
 
 - 写后读验收使用 Strong consistency
+
+## 混合检索与精排
+
+Collection `talent_evidence_v2` 在稠密向量之外增加 BM25 稀疏向量，由 Milvus 原生 Function 在写入时从 `content` 自动生成，`content` 使用 `chinese`（jieba + cnalphanumonly）分析器分词
+
+| 路径 | 用途 |
+|---|---|
+| `backend/app/reranker.py` | DashScope `gte-rerank-v2` 的 Cross-Encoder 精排封装 |
+| `backend/app/hybrid_search_service.py` | 稠密 + BM25 召回、RRF 融合、Rerank 精排的编排 |
+| `backend/scripts/verify_hybrid.py` | 对比纯向量、纯 BM25、混合召回和精排的召回与延迟 |
+| `backend/scripts/import_markdown_reviews.py` | 上传 5 份项目复盘 Markdown 并走完解析、切片、索引 |
+| `backend/tests/test_hybrid_search_service.py` | 混合检索编排与 Rerank 映射的回归测试 |
+
+稠密召回使用 `text-embedding-v3` 生成 1024 维查询向量，BM25 召回直接传入查询原文，两路结果由 `RRFRanker(k=60)` 融合，最后用 `gte-rerank-v2` 对候选做 Cross-Encoder 精排
+
+相关配置
+
+- `RERANK_MODEL`：精排模型，默认 `gte-rerank-v2`
+
+- `RERANK_TOP_N`：精排候选数，默认 20
+
+- `MILVUS_COLLECTION`：证据集合，当前为 `talent_evidence_v2`
+
+混合检索验收
+
+```bash
+cd backend
+uv run python -m scripts.verify_hybrid "有 Flink 实时计算经验的数据平台工程师" 5
+```
 
 ## 验证
 

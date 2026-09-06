@@ -50,8 +50,10 @@ def test_settings_include_milvus_connection_and_collection_contract():
     value = Settings(_env_file=None)
 
     assert value.milvus_uri == "http://127.0.0.1:19531"
-    assert value.milvus_collection == "talent_evidence_v1"
+    assert value.milvus_collection == "talent_evidence_v2"
     assert value.embedding_dimension == 1024
+    assert value.rerank_model == "gte-rerank-v2"
+    assert value.rerank_top_n == 20
 
 
 def test_chunking_enums_cover_persisted_strategy_and_status():

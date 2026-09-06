@@ -1,0 +1,20 @@
+2026-09-06 16:23:51 | INFO | app.main | health_check status=ok
+2026-09-06 16:23:51 | INFO | app.main | http_request method=GET path=/api/health status=200 duration_ms=3.89
+2026-09-06 16:23:51 | INFO | httpx | HTTP Request: GET http://testserver/api/health "HTTP/1.1 200 OK"
+2026-09-06 16:23:52 | INFO | app.main | http_request method=GET path=/openapi.json status=200 duration_ms=844.71
+2026-09-06 16:23:52 | INFO | httpx | HTTP Request: GET http://testserver/openapi.json "HTTP/1.1 200 OK"
+2026-09-06 16:23:52 | INFO | app.main | http_request method=GET path=/openapi.json status=200 duration_ms=49.01
+2026-09-06 16:23:52 | INFO | httpx | HTTP Request: GET http://testserver/openapi.json "HTTP/1.1 200 OK"
+2026-09-06 16:23:52 | INFO | app.mineru_client | mineru_parse_started file=C001_林晓岚_候选人简历.pdf size_bytes=148257
+2026-09-06 16:23:52 | INFO | app.mineru_client | mineru_parse_completed task_id=test-mineru-task source_name=C001_林晓岚_候选人简历 text_chars=883
+2026-09-06 16:23:52 | INFO | app.mineru_client | mineru_parse_started file=C002_陈泽宇_候选人简历.pdf size_bytes=139153
+2026-09-06 16:23:52 | INFO | app.mineru_client | mineru_parse_completed task_id=test-mineru-task source_name=C002_陈泽宇_候选人简历 text_chars=778
+2026-09-06 16:23:57 | INFO | httpx | HTTP Request: GET https://huggingface.co/api/models/Systran/faster-whisper-tiny/revision/main "HTTP/1.1 200 OK"
+2026-09-06 16:23:57 | INFO | faster_whisper | Processing audio with duration 00:56.312
+2026-09-06 16:23:57 | INFO | faster_whisper | VAD filter removed 00:00.000 of audio
+2026-09-06 16:24:07 | INFO | app.api | evidence_index_job_queued job_id=f630b17c-f5d0-429d-9c6c-63d605d91483 version_id=d9d7ee28-b6b1-4671-a8c5-7988c77d22b7
+2026-09-06 16:24:07 | ERROR | app.evidence_index_service | evidence_index_job_failed job_id=c31397ab-12ff-455b-9e0d-a39a7952971f version_id=0db8d256-022d-4da4-9863-8249a81e2161
+Traceback (most recent call last):
+  File "/Users/will/Documents/will-obsidian/2-Projects/lector/多Agent系统/code/talent-eval-agents/backend/app/evidence_index_service.py", line 116, in run_index_job
+    raise ValueError("DASHSCOPE_API_KEY 未配置，无法生成证据向量")
+ValueError: DASHSCOPE_API_KEY 未配置，无法生成证据向量

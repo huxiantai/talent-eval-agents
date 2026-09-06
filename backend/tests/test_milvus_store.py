@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 import pytest
+from pymilvus import DataType
 
 from app.milvus_store import EvidenceFilter, EvidenceRecord, MilvusEvidenceStore, build_filter_expression
 
@@ -12,6 +13,7 @@ class FakeMilvusClient:
         self.created_index = None
         self.upserted: list[dict] = []
         self.search_calls: list[dict] = []
+        self.hybrid_search_calls: list[dict] = []
         self.deleted_filters: list[str] = []
 
     def has_collection(self, collection_name: str) -> bool:
@@ -36,6 +38,10 @@ class FakeMilvusClient:
         self.search_calls.append(kwargs)
         return [[{"id": "chunk-1", "distance": 0.91, "entity": {"candidate_id": "C001", "content": "推荐系统升级"}}]]
 
+    def hybrid_search(self, **kwargs):
+        self.hybrid_search_calls.append(kwargs)
+        return [[{"id": "chunk-1", "distance": 0.033, "entity": {"candidate_id": "C001", "content": "推荐系统升级"}}]]
+
     def delete(self, **kwargs):
         self.deleted_filters.append(kwargs["filter"])
         return {"delete_count": 1}
@@ -44,9 +50,13 @@ class FakeMilvusClient:
 class FakeSchema:
     def __init__(self):
         self.fields: list[dict] = []
+        self.functions: list = []
 
     def add_field(self, **kwargs):
         self.fields.append(kwargs)
+
+    def add_function(self, function):
+        self.functions.append(function)
 
 
 class FakeIndexParams:
@@ -99,7 +109,7 @@ def test_filter_expression_rejects_empty_permission_scope():
 
 def test_store_creates_explicit_schema_and_hnsw_index():
     client = FakeMilvusClient()
-    store = MilvusEvidenceStore(client=client, collection_name="talent_evidence_v1", dimension=3)
+    store = MilvusEvidenceStore(client=client, collection_name="talent_evidence_v2", dimension=3)
 
     store.ensure_collection()
 
@@ -107,6 +117,14 @@ def test_store_creates_explicit_schema_and_hnsw_index():
     assert fields["chunk_id"]["is_primary"] is True
     assert fields["embedding"]["dim"] == 3
     assert fields["tenant_id"]["max_length"] == 64
+    assert fields["content"]["enable_analyzer"] is True
+    assert fields["content"]["analyzer_params"] == {"type": "chinese"}
+    assert fields["content_sparse"]["datatype"] == DataType.SPARSE_FLOAT_VECTOR
+    assert len(client.created_schema.functions) == 1
+    bm25 = client.created_schema.functions[0]
+    assert bm25.name == "content_bm25"
+    assert bm25.input_field_names == ["content"]
+    assert bm25.output_field_names == ["content_sparse"]
     assert client.created_index.indexes == [
         {
             "field_name": "embedding",
@@ -114,8 +132,54 @@ def test_store_creates_explicit_schema_and_hnsw_index():
             "index_type": "HNSW",
             "metric_type": "COSINE",
             "params": {"M": 16, "efConstruction": 128},
-        }
+        },
+        {
+            "field_name": "content_sparse",
+            "index_name": "evidence_content_bm25",
+            "index_type": "SPARSE_INVERTED_INDEX",
+            "metric_type": "BM25",
+        },
     ]
+
+
+def test_sparse_search_uses_bm25_metric_and_raw_text():
+    client = FakeMilvusClient()
+    store = MilvusEvidenceStore(client=client, collection_name="talent_evidence_v2", dimension=3)
+
+    results = store.sparse_search(
+        "Flink 实时计算",
+        filters=EvidenceFilter(tenant_id="course-demo", permission_scopes=["hr_private"]),
+        limit=5,
+    )
+
+    assert results[0].candidate_id == "C001"
+    call = client.search_calls[0]
+    assert call["data"] == ["Flink 实时计算"]
+    assert call["anns_field"] == "content_sparse"
+    assert call["search_params"] == {"metric_type": "BM25"}
+
+
+def test_hybrid_search_uses_rrf_ranker_and_two_requests():
+    client = FakeMilvusClient()
+    store = MilvusEvidenceStore(client=client, collection_name="talent_evidence_v2", dimension=3)
+
+    results = store.hybrid_search(
+        "Flink 实时计算",
+        [0.1, 0.2, 0.3],
+        filters=EvidenceFilter(tenant_id="course-demo", permission_scopes=["hr_private"]),
+        limit=5,
+        ef=80,
+        rrf_k=60,
+    )
+
+    assert results[0].chunk_id == "chunk-1"
+    assert results[0].score == pytest.approx(0.033)
+    call = client.hybrid_search_calls[0]
+    assert len(call["reqs"]) == 2
+    dense_req, sparse_req = call["reqs"]
+    assert dense_req.anns_field == "embedding"
+    assert sparse_req.anns_field == "content_sparse"
+    assert call["limit"] == 5
 
 
 def test_store_upsert_is_idempotent_by_chunk_id():
@@ -159,11 +223,21 @@ def test_search_applies_business_filter_and_returns_evidence():
 
 def test_delete_version_uses_tenant_and_version_filter():
     client = FakeMilvusClient()
-    store = MilvusEvidenceStore(client=client, collection_name="talent_evidence_v1", dimension=3)
+    client.collections.add("talent_evidence_v2")
+    store = MilvusEvidenceStore(client=client, collection_name="talent_evidence_v2", dimension=3)
 
     store.delete_version(tenant_id="course-demo", document_version_id="version-1")
 
     assert client.deleted_filters == ['tenant_id == "course-demo" and document_version_id == "version-1"']
+
+
+def test_delete_version_skips_when_collection_does_not_exist():
+    client = FakeMilvusClient()
+    store = MilvusEvidenceStore(client=client, collection_name="talent_evidence_v2", dimension=3)
+
+    store.delete_version(tenant_id="course-demo", document_version_id="version-1")
+
+    assert client.deleted_filters == []
 
 
 def test_search_reads_primary_key_from_entity_when_sdk_omits_top_level_id():

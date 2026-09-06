@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol, Sequence
 
-from pymilvus import DataType, MilvusClient
+from pymilvus import AnnSearchRequest, DataType, Function, FunctionType, MilvusClient, RRFRanker
 
 
 class MilvusClientProtocol(Protocol):
@@ -19,6 +19,8 @@ class MilvusClientProtocol(Protocol):
     def upsert(self, **kwargs: Any) -> Any: ...
 
     def search(self, **kwargs: Any) -> Any: ...
+
+    def hybrid_search(self, **kwargs: Any) -> Any: ...
 
     def delete(self, **kwargs: Any) -> Any: ...
 
@@ -133,12 +135,27 @@ class MilvusEvidenceStore:
         schema.add_field(field_name="permission_scope", datatype=DataType.VARCHAR, max_length=64)
         schema.add_field(field_name="embedding_model", datatype=DataType.VARCHAR, max_length=128)
         schema.add_field(field_name="content_hash", datatype=DataType.VARCHAR, max_length=64)
-        schema.add_field(field_name="content", datatype=DataType.VARCHAR, max_length=65535)
+        schema.add_field(
+            field_name="content",
+            datatype=DataType.VARCHAR,
+            max_length=65535,
+            enable_analyzer=True,
+            analyzer_params={"type": "chinese"},
+        )
         schema.add_field(field_name="parent_chunk_id", datatype=DataType.VARCHAR, max_length=36, nullable=True)
         schema.add_field(field_name="page_start", datatype=DataType.INT64, nullable=True)
         schema.add_field(field_name="page_end", datatype=DataType.INT64, nullable=True)
         schema.add_field(field_name="is_active", datatype=DataType.BOOL)
         schema.add_field(field_name="embedding", datatype=DataType.FLOAT_VECTOR, dim=self.dimension)
+        schema.add_field(field_name="content_sparse", datatype=DataType.SPARSE_FLOAT_VECTOR)
+        schema.add_function(
+            Function(
+                name="content_bm25",
+                function_type=FunctionType.BM25,
+                input_field_names=["content"],
+                output_field_names=["content_sparse"],
+            )
+        )
         index_params = self.client.prepare_index_params()
         index_params.add_index(
             field_name="embedding",
@@ -146,6 +163,12 @@ class MilvusEvidenceStore:
             index_type="HNSW",
             metric_type="COSINE",
             params={"M": 16, "efConstruction": 128},
+        )
+        index_params.add_index(
+            field_name="content_sparse",
+            index_name="evidence_content_bm25",
+            index_type="SPARSE_INVERTED_INDEX",
+            metric_type="BM25",
         )
         self.client.create_collection(
             collection_name=self.collection_name,
@@ -164,6 +187,21 @@ class MilvusEvidenceStore:
                 )
         self.client.upsert(collection_name=self.collection_name, data=[asdict(record) for record in records])
         return len(records)
+
+    def _to_results(self, rows: Any) -> list[EvidenceSearchResult]:
+        results: list[EvidenceSearchResult] = []
+        for hit in rows[0] if rows else []:
+            entity = dict(hit.get("entity") or {})
+            results.append(
+                EvidenceSearchResult(
+                    chunk_id=str(hit.get("id") or entity.get("chunk_id", "")),
+                    candidate_id=str(entity.get("candidate_id", "")),
+                    content=str(entity.get("content", "")),
+                    score=float(hit.get("distance", 0.0)),
+                    metadata=entity,
+                )
+            )
+        return results
 
     def search(
         self,
@@ -188,21 +226,71 @@ class MilvusEvidenceStore:
             search_params={"metric_type": "COSINE", "params": {"ef": ef}},
             consistency_level=consistency_level,
         )
-        results: list[EvidenceSearchResult] = []
-        for hit in rows[0] if rows else []:
-            entity = dict(hit.get("entity") or {})
-            results.append(
-                EvidenceSearchResult(
-                    chunk_id=str(hit.get("id") or entity.get("chunk_id", "")),
-                    candidate_id=str(entity.get("candidate_id", "")),
-                    content=str(entity.get("content", "")),
-                    score=float(hit.get("distance", 0.0)),
-                    metadata=entity,
-                )
+        return self._to_results(rows)
+
+    def sparse_search(
+        self,
+        query_text: str,
+        *,
+        filters: EvidenceFilter,
+        limit: int = 10,
+        consistency_level: str = "Bounded",
+    ) -> list[EvidenceSearchResult]:
+        rows = self.client.search(
+            collection_name=self.collection_name,
+            data=[query_text],
+            anns_field="content_sparse",
+            filter=build_filter_expression(filters),
+            limit=limit,
+            output_fields=self.output_fields,
+            search_params={"metric_type": "BM25"},
+            consistency_level=consistency_level,
+        )
+        return self._to_results(rows)
+
+    def hybrid_search(
+        self,
+        query_text: str,
+        query_vector: list[float],
+        *,
+        filters: EvidenceFilter,
+        limit: int = 10,
+        ef: int = 80,
+        rrf_k: int = 60,
+        consistency_level: str = "Bounded",
+    ) -> list[EvidenceSearchResult]:
+        if len(query_vector) != self.dimension:
+            raise ValueError(
+                f"query dimension {len(query_vector)} does not match collection dimension {self.dimension}"
             )
-        return results
+        filter_expression = build_filter_expression(filters)
+        dense_req = AnnSearchRequest(
+            data=[query_vector],
+            anns_field="embedding",
+            param={"metric_type": "COSINE", "params": {"ef": ef}},
+            limit=limit * 2,
+            filter=filter_expression,
+        )
+        sparse_req = AnnSearchRequest(
+            data=[query_text],
+            anns_field="content_sparse",
+            param={"metric_type": "BM25"},
+            limit=limit * 2,
+            filter=filter_expression,
+        )
+        rows = self.client.hybrid_search(
+            collection_name=self.collection_name,
+            reqs=[dense_req, sparse_req],
+            ranker=RRFRanker(k=rrf_k),
+            limit=limit,
+            output_fields=self.output_fields,
+            consistency_level=consistency_level,
+        )
+        return self._to_results(rows)
 
     def delete_version(self, *, tenant_id: str, document_version_id: str) -> None:
+        if not self.client.has_collection(self.collection_name):
+            return
         expression = (
             f"tenant_id == {_literal(tenant_id)} and "
             f"document_version_id == {_literal(document_version_id)}"

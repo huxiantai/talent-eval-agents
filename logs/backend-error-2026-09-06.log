@@ -1,0 +1,5 @@
+2026-09-06 16:24:07 | ERROR | app.evidence_index_service | evidence_index_job_failed job_id=c31397ab-12ff-455b-9e0d-a39a7952971f version_id=0db8d256-022d-4da4-9863-8249a81e2161
+Traceback (most recent call last):
+  File "/Users/will/Documents/will-obsidian/2-Projects/lector/多Agent系统/code/talent-eval-agents/backend/app/evidence_index_service.py", line 116, in run_index_job
+    raise ValueError("DASHSCOPE_API_KEY 未配置，无法生成证据向量")
+ValueError: DASHSCOPE_API_KEY 未配置，无法生成证据向量
