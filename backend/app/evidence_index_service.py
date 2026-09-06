@@ -114,12 +114,14 @@ def run_index_job(db: Session, job_id: Any, version_id: Any) -> EvidenceIndexJob
         embedder = get_embedding_model()
         if embedder is None:
             raise ValueError("DASHSCOPE_API_KEY 未配置，无法生成证据向量")
+        store = get_evidence_store()
+        store.delete_version(tenant_id=document.tenant_id, document_version_id=str(version.id))
         job.indexed_count = index_chunks(
             document=document,
             chunks=chunks,
             embedding_model=job.embedding_model,
             embedder=embedder,
-            store=get_evidence_store(),
+            store=store,
         )
         job.status = IndexStatus.SUCCEEDED
         job.error_message = None

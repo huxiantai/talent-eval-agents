@@ -2,10 +2,12 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from app import api
 from app.api import EvidenceSearchInput
-from app.models import EvidenceIndexJob, IndexStatus
+from app.models import Base, Document, DocumentVersion, EmployeeProfile, EvidenceIndexJob, FileObject, IndexStatus
 
 
 class FakeRedis:
@@ -95,12 +97,21 @@ def test_search_evidence_builds_filter_from_headers_and_payload(monkeypatch):
         ),
         x_tenant_id="course-demo",
         x_permission_scopes="hr_private, manager_private",
+        db=None,
     )
 
     assert result == [
         {
             "chunk_id": "chunk-1",
             "candidate_id": "C001",
+            "candidate_name": "C001",
+            "document_id": None,
+            "document_title": None,
+            "material_no": None,
+            "document_type": None,
+            "permission_scope": "hr_private",
+            "page_start": None,
+            "page_end": None,
             "content": "负责推荐系统升级",
             "score": 0.97,
             "metadata": {"permission_scope": "hr_private"},
@@ -122,6 +133,7 @@ def test_search_evidence_rejects_empty_permission_scope_header():
             EvidenceSearchInput(query="推荐系统负责人"),
             x_tenant_id="course-demo",
             x_permission_scopes=" , ",
+            db=None,
         )
 
 
@@ -139,3 +151,73 @@ def test_retry_index_job_requires_failed_status():
 
     with pytest.raises(api.HTTPException, match="只能重试失败的索引任务"):
         api.retry_index_job(job_id, db=fake_db)
+
+
+def test_search_evidence_returns_document_and_candidate_context(monkeypatch):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = Session(engine)
+    employee = EmployeeProfile(employee_no="C001", name="林晓岚")
+    session.add(employee)
+    session.flush()
+    document = Document(
+        candidate_id="C001",
+        employee_id=employee.id,
+        tenant_id="course-demo",
+        title="林晓岚简历",
+        document_type="resume",
+        permission_scope="hr_private",
+    )
+    session.add(document)
+    session.flush()
+    file_object = FileObject(
+        bucket_name="talent-documents",
+        object_key="documents/demo.pdf",
+        original_name="demo.pdf",
+        mime_type="application/pdf",
+        size_bytes=128,
+        sha256="1" * 64,
+    )
+    session.add(file_object)
+    session.flush()
+    version = DocumentVersion(document_id=document.id, file_object_id=file_object.id, version_no=1, is_current=True)
+    session.add(version)
+    session.commit()
+
+    class Embedder:
+        def embed_query(self, text: str) -> list[float]:
+            return [0.1, 0.2, 0.3]
+
+    class Store:
+        def search(self, query_vector, *, filters, limit, ef):
+            return [
+                SimpleNamespace(
+                    chunk_id="chunk-1",
+                    candidate_id="C001",
+                    content="负责推荐系统升级",
+                    score=0.97,
+                    metadata={
+                        "document_version_id": str(version.id),
+                        "document_type": "resume",
+                        "permission_scope": "hr_private",
+                        "page_start": 2,
+                        "page_end": 3,
+                    },
+                )
+            ]
+
+    monkeypatch.setattr(api, "get_embedding_model", lambda: Embedder())
+    monkeypatch.setattr(api, "get_evidence_store", lambda: Store())
+
+    result = api.search_evidence(
+        EvidenceSearchInput(query="推荐系统负责人"),
+        x_tenant_id="course-demo",
+        x_permission_scopes="hr_private",
+        db=session,
+    )
+
+    assert result[0]["candidate_name"] == "林晓岚"
+    assert result[0]["document_title"] == "林晓岚简历"
+    assert result[0]["material_no"] is None
+    assert result[0]["page_start"] == 2
+    assert result[0]["page_end"] == 3

@@ -61,3 +61,8 @@ class ObjectStore:
         url = self.public_client.generate_presigned_url("get_object", Params={"Bucket": self.settings.s3_bucket, "Key": key}, ExpiresIn=expires)
         logger.info("object_store_presigned_url_created bucket=%s key=%s expires_seconds=%s", self.settings.s3_bucket, key, expires)
         return url
+
+    def delete(self, key: str) -> None:
+        logger.info("object_store_delete_started bucket=%s key=%s", self.settings.s3_bucket, key)
+        self.client.delete_object(Bucket=self.settings.s3_bucket, Key=key)
+        logger.info("object_store_delete_completed bucket=%s key=%s", self.settings.s3_bucket, key)

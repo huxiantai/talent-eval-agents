@@ -176,6 +176,23 @@ main {
   width: 100%
 }
 
+.filterSelect {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px
+}
+
+.filterSelect select {
+  min-width: 132px;
+  padding: 8px 34px 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: #304139;
+  background: white
+}
+
 .pagination {
   display: flex;
   align-items: center;
@@ -223,14 +240,161 @@ main {
   width: 14px
 }
 
+.ghost.danger {
+  border-color: #d78d8d;
+  color: #a14545
+}
+
+.small {
+  padding: 6px 10px;
+  font-size: 12px
+}
+
 .roster,
 .docs {
   border-radius: 0
 }
 
+.docs .tr {
+  grid-template-columns: .32fr 1.8fr .7fr .7fr .8fr .85fr .46fr
+}
+
+.docRow {
+  min-width: 1120px
+}
+
+.checkCell {
+  display: flex;
+  align-items: center;
+  justify-content: center
+}
+
+.checkCell input {
+  width: 16px;
+  height: 16px
+}
+
+.recallLab {
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff, #f6faf8)
+}
+
+.recallHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px
+}
+
+.recallHead h3 {
+  margin: 0 0 4px;
+  font-size: 18px
+}
+
+.recallHead p,
+.secondaryText {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6
+}
+
+.recallFilters {
+  display: grid;
+  grid-template-columns: 1.6fr repeat(4, minmax(0, .8fr));
+  gap: 10px;
+  align-items: end
+}
+
+.recallFilters label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px
+}
+
+.recallFilters input,
+.recallFilters select {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white
+}
+
+.recallFilters .wide {
+  grid-column: auto
+}
+
+.recallEmpty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 10px;
+  color: var(--muted);
+  background: #eef5f2
+}
+
+.recallEmpty svg {
+  width: 18px
+}
+
+.recallResults {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px
+}
+
+.recallCard {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: white
+}
+
+.recallCard header,
+.recallCard footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px
+}
+
+.recallMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0
+}
+
+.recallMeta span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #465650;
+  font-size: 12px;
+  background: #eef4f1
+}
+
+.recallCard p {
+  margin: 0 0 12px;
+  color: #23322d;
+  line-height: 1.7
+}
+
+.recallCard code {
+  color: var(--muted)
+}
+
 .chunkControls {
   display: grid;
-  grid-template-columns: minmax(0, 1.8fr) repeat(2, minmax(0, .8fr)) auto;
+  grid-template-columns: minmax(0, 1.8fr) repeat(2, minmax(0, .8fr)) auto auto;
   align-items: end;
   gap: 9px;
   padding: 14px;
@@ -331,6 +495,21 @@ main {
   color: #aa3d3d
 }
 
+.drawerStatusRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px
+}
+
+.drawerStatusRow span:not(.status) {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #eef4f1
+}
+
 .empty.compact {
   padding: 32px 20px
 }
@@ -366,7 +545,22 @@ main {
     max-width: calc(100vw - 150px)
   }
 
+  .recallHead,
+  .libraryHead {
+    display: block
+  }
+
+  .recallHead .ghost,
+  .libraryHead .actions {
+    margin-top: 10px
+  }
+
+  .recallFilters,
   .chunkControls {
     grid-template-columns: 1fr
+  }
+
+  .docs .tr {
+    min-width: 1180px
   }
 }

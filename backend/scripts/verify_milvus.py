@@ -55,21 +55,23 @@ def main() -> None:
         filters=EvidenceFilter(tenant_id="course-demo", permission_scopes=["hr_private"]),
         limit=5,
         ef=80,
-        consistency_level="Strong",
+        consistency_level="Strong", # 默认是 Bounded 查询，即写即查无结果
     )
-    print(
-        json.dumps(
-            {
-                "collection": store.collection_name,
-                "upserted": upserted,
-                "matched": len(results),
-                "top_candidate": results[0].candidate_id,
-                "top_score": round(results[0].score, 4),
-                "permission_scope": results[0].metadata["permission_scope"],
-            },
-            ensure_ascii=False,
+    print(f"Upserted {upserted} records, found {len(results)} matching results")
+    if results:
+        print(
+            json.dumps(
+                {
+                    "collection": store.collection_name,
+                    "upserted": upserted,
+                    "matched": len(results),
+                    "top_candidate": results[0].candidate_id,
+                    "top_score": round(results[0].score, 4),
+                    "permission_scope": results[0].metadata["permission_scope"],
+                },
+                ensure_ascii=False,
+            )
         )
-    )
 
 
 if __name__ == "__main__":

@@ -72,8 +72,12 @@ def test_run_index_job_marks_job_succeeded_and_updates_index_count(monkeypatch):
     ]
     fake_db = FakeSession(job=job, version=version, document=document, run_id=uuid4(), chunks=chunks)
 
+    class Store:
+        def delete_version(self, **kwargs):
+            return None
+
     monkeypatch.setattr(evidence_index_service, "get_embedding_model", lambda: SimpleNamespace())
-    monkeypatch.setattr(evidence_index_service, "get_evidence_store", lambda: SimpleNamespace())
+    monkeypatch.setattr(evidence_index_service, "get_evidence_store", lambda: Store())
     monkeypatch.setattr(evidence_index_service, "index_chunks", lambda **kwargs: 1)
 
     result = evidence_index_service.run_index_job(fake_db, job.id, version.id)
@@ -119,3 +123,50 @@ def test_run_index_job_marks_job_failed_when_embedding_service_unavailable(monke
     assert result.status == IndexStatus.FAILED
     assert "DASHSCOPE_API_KEY" in result.error_message
     assert fake_db.commit_count == 2
+
+
+def test_run_index_job_rebuilds_version_index_before_upsert(monkeypatch):
+    job = EvidenceIndexJob(
+        id=uuid4(),
+        document_version_id=uuid4(),
+        embedding_model="text-embedding-v3",
+        collection_name="talent_evidence_v1",
+        status=IndexStatus.PENDING,
+    )
+    version = SimpleNamespace(id=job.document_version_id, document_id=uuid4())
+    document = SimpleNamespace(id=version.document_id, tenant_id="course-demo", candidate_id="C001")
+    chunks = [
+        SimpleNamespace(
+            id=uuid4(),
+            candidate_id="C001",
+            document_version_id=version.id,
+            document_type="resume",
+            permission_scope="hr_private",
+            content="负责推荐系统升级",
+            parent_chunk_id=None,
+            page_start=1,
+            page_end=1,
+        )
+    ]
+    fake_db = FakeSession(job=job, version=version, document=document, run_id=uuid4(), chunks=chunks)
+    seen: dict[str, object] = {}
+
+    class Store:
+        def delete_version(self, *, tenant_id, document_version_id):
+            seen["tenant_id"] = tenant_id
+            seen["document_version_id"] = document_version_id
+
+    monkeypatch.setattr(evidence_index_service, "get_embedding_model", lambda: SimpleNamespace())
+    monkeypatch.setattr(evidence_index_service, "get_evidence_store", lambda: Store())
+
+    def fake_index_chunks(**kwargs):
+        seen["store"] = kwargs["store"]
+        return 1
+
+    monkeypatch.setattr(evidence_index_service, "index_chunks", fake_index_chunks)
+
+    result = evidence_index_service.run_index_job(fake_db, job.id, version.id)
+
+    assert result.status == IndexStatus.SUCCEEDED
+    assert seen["tenant_id"] == "course-demo"
+    assert seen["document_version_id"] == str(version.id)

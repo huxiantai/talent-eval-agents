@@ -2,7 +2,7 @@ import logging
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from redis import Redis
 from sqlalchemy import func, select
@@ -14,10 +14,13 @@ from app.chunk_service import (
 )
 from app.config import get_settings
 from app.database import get_db
+from app.document_cleanup import delete_document_bundle
+from app.document_pipeline import queue_index_job, queue_parse_job, summarize_pipeline_status
 from app.evidence_index_service import get_evidence_store
 from app.milvus_store import EvidenceFilter
 from app.model_provider import get_embedding_model
 from app.models import (
+    ChunkingRun,
     Document,
     DocumentVersion,
     EmployeeProfile,
@@ -66,12 +69,65 @@ class EvidenceSearchInput(BaseModel):
     ef: int = Field(default=80, ge=10, le=1000)
 
 
+class DeleteDocumentsInput(BaseModel):
+    document_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+
 def employee_json(item: EmployeeProfile, material_count: int = 0):
     today = date.today()
     age = None
     if item.birth_date:
         age = today.year - item.birth_date.year - ((today.month, today.day) < (item.birth_date.month, item.birth_date.day))
     return {"id": item.id, "employee_no": item.employee_no, "name": item.name, "gender": item.gender, "birth_date": item.birth_date, "age": age, "region": item.region, "current_position": item.current_position, "job_level": item.job_level, "years_of_experience": item.years_of_experience, "department": item.department, "employment_status": item.employment_status, "material_count": material_count}
+
+
+def latest_parse_job(db: Session, version_id: UUID | None) -> ParseJob | None:
+    if version_id is None:
+        return None
+    return db.scalar(
+        select(ParseJob)
+        .where(ParseJob.document_version_id == version_id)
+        .order_by(ParseJob.created_at.desc())
+        .limit(1)
+    )
+
+
+def latest_chunking_run(db: Session, version_id: UUID | None) -> ChunkingRun | None:
+    if version_id is None:
+        return None
+    return db.scalar(
+        select(ChunkingRun)
+        .join(ParseJob, ParseJob.id == ChunkingRun.parse_job_id)
+        .where(ParseJob.document_version_id == version_id)
+        .order_by(ChunkingRun.created_at.desc())
+        .limit(1)
+    )
+
+
+def latest_index_job(db: Session, version_id: UUID | None) -> EvidenceIndexJob | None:
+    if version_id is None:
+        return None
+    return db.scalar(
+        select(EvidenceIndexJob)
+        .where(EvidenceIndexJob.document_version_id == version_id)
+        .order_by(EvidenceIndexJob.created_at.desc())
+        .limit(1)
+    )
+
+
+def build_document_pipeline_payload(db: Session, document_id: UUID) -> dict[str, str | None]:
+    version = current_version(db, document_id)
+    snapshot = summarize_pipeline_status(
+        parse_job=latest_parse_job(db, version.id if version else None),
+        chunk_run=latest_chunking_run(db, version.id if version else None),
+        index_job=latest_index_job(db, version.id if version else None),
+    )
+    return {
+        "pipeline_status": snapshot.pipeline_status,
+        "parse_status": snapshot.parse_status,
+        "chunk_status": snapshot.chunk_status,
+        "index_status": snapshot.index_status,
+    }
 
 
 @router.get("/employees")
@@ -115,7 +171,27 @@ def list_documents(knowledge_base_id: UUID | None = None, db: Session = Depends(
     if knowledge_base_id:
         query = query.where(Document.knowledge_base_id == knowledge_base_id)
     items = db.scalars(query).all()
-    return [{"id": item.id, "material_no": item.material_no, "candidate_id": item.candidate_id, "employee_name": item.employee.name if item.employee else item.candidate_id, "knowledge_base_id": item.knowledge_base_id, "title": item.title, "document_type": item.document_type, "status": item.status, "created_at": item.created_at} for item in items]
+    result = []
+    for item in items:
+        pipeline = build_document_pipeline_payload(db, item.id)
+        result.append(
+            {
+                "id": item.id,
+                "material_no": item.material_no,
+                "candidate_id": item.candidate_id,
+                "employee_name": item.employee.name if item.employee else item.candidate_id,
+                "knowledge_base_id": item.knowledge_base_id,
+                "title": item.title,
+                "document_type": item.document_type,
+                "status": item.status,
+                "pipeline_status": pipeline["pipeline_status"],
+                "parse_status": pipeline["parse_status"],
+                "chunk_status": pipeline["chunk_status"],
+                "index_status": pipeline["index_status"],
+                "created_at": item.created_at,
+            }
+        )
+    return result
 
 
 @router.post("/documents", status_code=201)
@@ -129,8 +205,21 @@ async def create_document(file: UploadFile = File(...), employee_id: UUID | None
     if knowledge_base_id and not db.get(KnowledgeBase, knowledge_base_id):
         raise HTTPException(404, "知识库不存在")
     document = upload_document(db, ObjectStore(), filename=file.filename or "upload.bin", content=content, candidate_id=candidate_id, employee_id=employee_id, knowledge_base_id=knowledge_base_id, title=title, document_type=document_type, permission_scope=permission_scope)
+    version = current_version(db, document.id)
+    parse_job = queue_parse_job(
+        db,
+        Redis.from_url(get_settings().redis_url, decode_responses=True),
+        version.id,
+    )
     logger.info("document_upload_response document_id=%s material_no=%s", document.id, document.material_no)
-    return {"id": document.id, "material_no": document.material_no, "candidate_id": document.candidate_id, "title": document.title}
+    return {
+        "id": document.id,
+        "material_no": document.material_no,
+        "candidate_id": document.candidate_id,
+        "title": document.title,
+        "pipeline_status": "parsing",
+        "parse_job_id": parse_job.id,
+    }
 
 
 @router.get("/documents/{document_id}")
@@ -141,6 +230,7 @@ def get_document(document_id: UUID, db: Session = Depends(get_db)):
     version = current_version(db, document_id)
     file_object = db.get(FileObject, version.file_object_id) if version else None
     jobs = db.scalars(select(ParseJob).where(ParseJob.document_version_id == version.id).order_by(ParseJob.created_at.desc())).all() if version else []
+    index_jobs = db.scalars(select(EvidenceIndexJob).where(EvidenceIndexJob.document_version_id == version.id).order_by(EvidenceIndexJob.created_at.desc())).all() if version else []
     latest = jobs[0] if jobs else None
     artifacts = db.scalars(select(ParseArtifact).where(ParseArtifact.parse_job_id == latest.id)).all() if latest else []
     store = ObjectStore()
@@ -150,7 +240,8 @@ def get_document(document_id: UUID, db: Session = Depends(get_db)):
         if item.artifact_type == "markdown":
             content = store.get_bytes(item.object_key).decode("utf-8", errors="replace")
         artifact_items.append({"id": item.id, "type": item.artifact_type, "content_type": item.content_type, "url": store.presigned_get(item.object_key), "content": content})
-    return {"id": document.id, "material_no": document.material_no, "candidate_id": document.candidate_id, "employee": {"id": document.employee.id, "employee_no": document.employee.employee_no, "name": document.employee.name} if document.employee else None, "knowledge_base": {"id": document.knowledge_base.id, "name": document.knowledge_base.name} if document.knowledge_base else None, "title": document.title, "document_type": document.document_type, "permission_scope": document.permission_scope, "created_at": document.created_at, "updated_at": document.updated_at, "version": {"id": version.id, "version_no": version.version_no, "created_at": version.created_at} if version else None, "file": {"name": file_object.original_name, "mime_type": file_object.mime_type, "size_bytes": file_object.size_bytes, "bucket_name": file_object.bucket_name, "object_key": file_object.object_key, "preview_url": store.presigned_get(file_object.object_key)} if file_object else None, "jobs": [{"id": job.id, "parser_name": job.parser_name, "parser_version": job.parser_version, "status": job.status, "progress": job.progress, "error_message": job.error_message, "created_at": job.created_at} for job in jobs], "artifacts": artifact_items}
+    pipeline = build_document_pipeline_payload(db, document.id)
+    return {"id": document.id, "material_no": document.material_no, "candidate_id": document.candidate_id, "employee": {"id": document.employee.id, "employee_no": document.employee.employee_no, "name": document.employee.name} if document.employee else None, "knowledge_base": {"id": document.knowledge_base.id, "name": document.knowledge_base.name} if document.knowledge_base else None, "title": document.title, "document_type": document.document_type, "permission_scope": document.permission_scope, "created_at": document.created_at, "updated_at": document.updated_at, "version": {"id": version.id, "version_no": version.version_no, "created_at": version.created_at} if version else None, "file": {"name": file_object.original_name, "mime_type": file_object.mime_type, "size_bytes": file_object.size_bytes, "bucket_name": file_object.bucket_name, "object_key": file_object.object_key, "preview_url": store.presigned_get(file_object.object_key)} if file_object else None, "jobs": [{"id": job.id, "parser_name": job.parser_name, "parser_version": job.parser_version, "status": job.status, "progress": job.progress, "error_message": job.error_message, "created_at": job.created_at} for job in jobs], "index_jobs": [{"id": job.id, "status": job.status, "embedding_model": job.embedding_model, "collection_name": job.collection_name, "indexed_count": job.indexed_count, "retry_count": job.retry_count, "error_message": job.error_message, "created_at": job.created_at} for job in index_jobs], "pipeline_status": pipeline["pipeline_status"], "parse_status": pipeline["parse_status"], "chunk_status": pipeline["chunk_status"], "index_status": pipeline["index_status"], "artifacts": artifact_items}
 
 
 @router.post("/documents/{document_id}/parse")
@@ -160,10 +251,11 @@ def parse_document_endpoint(document_id: UUID, async_mode: bool = True, db: Sess
     if not version:
         raise HTTPException(404, "文档版本不存在")
     if async_mode:
-        job = ParseJob(document_version_id=version.id, parser_name="queued")
-        db.add(job)
-        db.commit()
-        Redis.from_url(get_settings().redis_url, decode_responses=True).rpush("talent:parse:queue", f"{job.id}:{version.id}")
+        job = queue_parse_job(
+            db,
+            Redis.from_url(get_settings().redis_url, decode_responses=True),
+            version.id,
+        )
         logger.info("parse_job_queued document_id=%s version_id=%s job_id=%s queue=talent:parse:queue", document_id, version.id, job.id)
         return {"id": job.id, "status": job.status, "parser_name": job.parser_name, "error_message": None}
     job = parse_version(db, ObjectStore(), version.id)
@@ -244,19 +336,25 @@ def create_evidence_index(document_id: UUID, db: Session = Depends(get_db)):
     if not version:
         raise HTTPException(404, "文档版本不存在")
     settings = get_settings()
-    job = EvidenceIndexJob(
-        document_version_id=version.id,
-        status=IndexStatus.PENDING,
-        embedding_model=settings.embedding_model,
-        collection_name=settings.milvus_collection,
-    )
-    db.add(job)
-    db.commit()
-    Redis.from_url(settings.redis_url, decode_responses=True).rpush(
-        "talent:index:queue", f"{job.id}:{version.id}"
+    job = queue_index_job(
+        db,
+        Redis.from_url(settings.redis_url, decode_responses=True),
+        version.id,
+        settings=settings,
     )
     logger.info("evidence_index_job_queued job_id=%s version_id=%s", job.id, version.id)
     return {"id": job.id, "status": job.status, "document_version_id": version.id}
+
+
+@router.delete("/documents")
+def delete_documents(payload: DeleteDocumentsInput = Body(...), db: Session = Depends(get_db)):
+    missing = [document_id for document_id in payload.document_ids if not db.get(Document, document_id)]
+    if missing:
+        raise HTTPException(404, f"文档不存在: {missing[0]}")
+    store = ObjectStore()
+    milvus_store = get_evidence_store()
+    items = [delete_document_bundle(db, store, milvus_store, document_id) for document_id in payload.document_ids]
+    return {"deleted_count": len(items), "items": items}
 
 
 @router.post("/evidence/search")
@@ -264,6 +362,7 @@ def search_evidence(
     payload: EvidenceSearchInput,
     x_tenant_id: str = Header(...),
     x_permission_scopes: str = Header(...),
+    db: Session | None = Depends(get_db),
 ):
     permission_scopes = [value.strip() for value in x_permission_scopes.split(",") if value.strip()]
     if not permission_scopes:
@@ -287,16 +386,42 @@ def search_evidence(
     except Exception as exc:
         logger.exception("evidence_search_failed tenant_id=%s", x_tenant_id)
         raise HTTPException(503, f"证据检索失败: {exc}") from exc
-    return [
-        {
-            "chunk_id": item.chunk_id,
-            "candidate_id": item.candidate_id,
-            "content": item.content,
-            "score": item.score,
-            "metadata": item.metadata,
-        }
+    version_ids = [
+        UUID(value)
         for item in results
-    ]
+        for value in [item.metadata.get("document_version_id")]
+        if value
+    ] if db else []
+    versions = db.scalars(select(DocumentVersion).where(DocumentVersion.id.in_(version_ids))).all() if db and version_ids else []
+    version_by_id = {str(item.id): item for item in versions}
+    documents = db.scalars(select(Document).where(Document.id.in_([item.document_id for item in versions]))).all() if db and versions else []
+    document_by_id = {item.id: item for item in documents}
+    employees = db.scalars(select(EmployeeProfile).where(EmployeeProfile.id.in_([item.employee_id for item in documents if item.employee_id]))).all() if db and documents else []
+    employee_by_id = {item.id: item for item in employees}
+
+    items = []
+    for item in results:
+        version = version_by_id.get(str(item.metadata.get("document_version_id")))
+        document = document_by_id.get(version.document_id) if version else None
+        employee = employee_by_id.get(document.employee_id) if document and document.employee_id else None
+        items.append(
+            {
+                "chunk_id": item.chunk_id,
+                "candidate_id": item.candidate_id,
+                "candidate_name": employee.name if employee else item.candidate_id,
+                "document_id": str(document.id) if document else None,
+                "document_title": document.title if document else None,
+                "material_no": document.material_no if document else None,
+                "document_type": item.metadata.get("document_type"),
+                "permission_scope": item.metadata.get("permission_scope"),
+                "page_start": item.metadata.get("page_start"),
+                "page_end": item.metadata.get("page_end"),
+                "content": item.content,
+                "score": item.score,
+                "metadata": item.metadata,
+            }
+        )
+    return items
 
 
 @router.post("/jobs/{job_id}/retry")

@@ -15,7 +15,7 @@
 
 ## 产品定位
 
-前端是多 Agent 人才评估与推荐系统的统一应用壳层，人才档案模块包含员工花名册和档案资料库。花名册维护结构化员工数据，提供新建员工和每页 10 人分页。档案资料库通过知识库下拉框切换文件集合，文件表按每页 10 条分页。文件详情展示原文件、解析结果、切片预览与基础元数据。切片预览只保留第 5 课实际授课需要的能力：统一触发切片、查看 Parent-Child 关系、查看来源元素与页码或时间定位
+前端是多 Agent 人才评估与推荐系统的统一应用壳层，人才档案模块包含员工花名册和档案资料库。花名册维护结构化员工数据，提供新建员工和每页 10 人分页。档案资料库通过知识库下拉框切换文件集合，文件表按每页 10 条分页，上传后自动排入解析、切片和 Milvus 索引链路，同时支持批量删除材料与关联数据。文件详情展示原文件、解析结果、索引记录、切片预览与基础元数据。档案资料库页面内置证据召回测试，可输入查询并附带候选人、材料类型和权限范围过滤项，直接查看匹配 Chunk、相似度分数和来源材料
 
 ## 运行模式
 
@@ -97,13 +97,14 @@ docker compose -p talent-eval-agents-course --profile app up -d --build
 | `GET /api/knowledge-bases` | 查询档案知识库及文件数量 |
 | `POST /api/knowledge-bases` | 创建档案知识库 |
 | `GET /api/documents` | 查询知识库文件 |
-| `POST /api/documents` | 上传文件并关联员工与知识库 |
-| `GET /api/documents/{id}` | 查询原文件、基础元数据、解析任务与 Markdown 产物 |
+| `POST /api/documents` | 上传文件、关联员工与知识库，并自动创建解析任务 |
+| `DELETE /api/documents` | 批量删除文档，同时删除原文件、解析产物、切片和 Milvus 向量 |
+| `GET /api/documents/{id}` | 查询原文件、基础元数据、解析任务、索引任务与 Markdown 产物 |
 | `POST /api/documents/{id}/parse` | 创建异步解析任务 |
 | `GET /api/documents/{id}/chunks` | 查询最新一次成功切片及 Parent-Child 关系 |
 | `POST /api/documents/{id}/chunks` | 按材料结构自动执行 Markdown 结构化切分或纯文本递归切分 |
-| `POST /api/documents/{id}/evidence-index` | 创建当前文档版本的异步 Milvus 索引任务 |
-| `POST /api/evidence/search` | 按租户、权限范围和业务条件检索人才证据 |
+| `POST /api/documents/{id}/evidence-index` | 为当前文档版本手动创建异步 Milvus 索引任务 |
+| `POST /api/evidence/search` | 按租户、权限范围和业务条件检索人才证据，并返回来源材料与候选人上下文 |
 | `POST /api/index-jobs/{id}/retry` | 为失败的 Milvus 索引任务创建新的幂等重试任务 |
 
 ## Chunk 模块
@@ -171,9 +172,13 @@ Milvus 作为独立向量检索服务，PostgreSQL 继续保存文档、版本�
 |---|---|
 | `backend/app/milvus_store.py` | Collection Schema、HNSW、Upsert、标量过滤、搜索与按版本删除 |
 | `backend/app/evidence_index_service.py` | Chunk 向量化、Evidence Record 映射、索引任务执行与状态更新 |
+| `backend/app/document_pipeline.py` | 上传后的自动解析、自动切片、自动索引编排与处理状态汇总 |
+| `backend/app/document_cleanup.py` | 文档删除时的对象存储、PostgreSQL 和 Milvus 级联清理 |
 | `backend/scripts/verify_milvus.py` | 使用确定性向量验证 Collection、Upsert、权限过滤和 HNSW 搜索 |
 | `backend/tests/test_milvus_store.py` | Milvus 存储适配器的行为回归测试 |
 | `backend/tests/test_evidence_index_service.py` | Chunk 到 Evidence Record 的转换与索引编排测试 |
+| `backend/tests/test_document_pipeline.py` | 自动处理编排与任务入队测试 |
+| `backend/tests/test_document_cleanup.py` | 材料删除时的跨存储级联清理测试 |
 
 开发环境使用 Milvus Standalone 2.6.17、etcd 和已有 MinIO
 
@@ -232,6 +237,8 @@ uv run pytest tests -q
 ```
 
 当前回归结果以本次本地 `pytest` 结果为准
+
+当前本地结果：`82 passed, 2 warnings`
 
 ## 服务日志
 
