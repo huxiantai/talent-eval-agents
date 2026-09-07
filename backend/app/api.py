@@ -1,5 +1,6 @@
 import logging
 from datetime import date
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, File, Form, Header, HTTPException, UploadFile
@@ -20,6 +21,8 @@ from app.evidence_index_service import get_evidence_store
 from app.hybrid_search_service import hybrid_search_evidence as hybrid_search_evidence_service
 from app.milvus_store import EvidenceFilter
 from app.model_provider import get_embedding_model
+from app.model_provider import get_chat_model
+from app.query_plan import QueryPlan, compile_query_plan, merge_query_results, search_with_optimization, select_candidate_ids
 from app.reranker import get_reranker
 from app.models import (
     ChunkingRun,
@@ -75,6 +78,19 @@ class HybridSearchInput(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     candidate_ids: list[str] | None = None
     document_types: list[str] | None = None
+    limit: int = Field(default=10, ge=1, le=100)
+    ef: int = Field(default=80, ge=10, le=1000)
+    rrf_k: int = Field(default=60, ge=1, le=1000)
+    rerank_top_n: int = Field(default=20, ge=1, le=100)
+
+
+class QueryPlanInput(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+
+
+class TalentSearchInput(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    retrieval_mode: Literal["standard", "auto_optimize"] = "standard"
     limit: int = Field(default=10, ge=1, le=100)
     ef: int = Field(default=80, ge=10, le=1000)
     rrf_k: int = Field(default=60, ge=1, le=1000)
@@ -514,6 +530,132 @@ def hybrid_search_evidence(
         evidence_item_json(item, version_by_id, document_by_id, employee_by_id, score=item.rerank_score)
         for item in results
     ]
+
+
+@router.post("/talent-search/plan")
+def create_talent_query_plan(payload: QueryPlanInput):
+    model = get_chat_model(temperature=0)
+    if model is None:
+        raise HTTPException(503, "查询计划模型未配置")
+    try:
+        return compile_query_plan(payload.query, model)
+    except Exception as exc:
+        logger.exception("query_plan_compile_failed")
+        raise HTTPException(503, f"查询计划生成失败: {exc}") from exc
+
+
+@router.post("/talent-search/candidates")
+def query_talent_candidates(
+    plan: QueryPlan,
+    x_tenant_id: str = Header(...),
+    db: Session = Depends(get_db),
+):
+    if not plan.executable:
+        raise HTTPException(422, {"code": "clarification_required", "items": [item.model_dump() for item in plan.clarifications]})
+    try:
+        candidate_ids = select_candidate_ids(db, plan, tenant_id=x_tenant_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"candidate_ids": candidate_ids, "candidate_count": len(candidate_ids), "semantic_requirements": plan.semantic_requirements}
+
+
+@router.post("/talent-search")
+def search_talent(
+    payload: TalentSearchInput,
+    x_tenant_id: str = Header(...),
+    x_permission_scopes: str = Header(...),
+    db: Session = Depends(get_db),
+):
+    permission_scopes = [value.strip() for value in x_permission_scopes.split(",") if value.strip()]
+    if not permission_scopes:
+        raise HTTPException(403, "缺少可用的证据权限范围")
+
+    model = get_chat_model(temperature=0)
+    embedder = get_embedding_model()
+    reranker = get_reranker()
+    if model is None:
+        raise HTTPException(503, "查询计划模型未配置")
+    if embedder is None:
+        raise HTTPException(503, "Embedding 服务未配置")
+    if reranker is None:
+        raise HTTPException(503, "Rerank 服务未配置")
+
+    try:
+        plan = compile_query_plan(payload.query, model)
+        if not plan.executable:
+            raise HTTPException(
+                422,
+                {
+                    "code": "clarification_required",
+                    "items": [item.model_dump() for item in plan.clarifications],
+                },
+            )
+        candidate_ids = select_candidate_ids(db, plan, tenant_id=x_tenant_id)
+        if not candidate_ids:
+            return {"query_plan": plan, "candidate_ids": [], "searches": [], "chunks": []}
+
+        store = get_evidence_store()
+
+        def run_hybrid_search(query: str):
+            return hybrid_search_evidence_service(
+                query=query,
+                filters=EvidenceFilter(
+                    tenant_id=x_tenant_id,
+                    permission_scopes=permission_scopes,
+                    candidate_ids=candidate_ids,
+                ),
+                store=store,
+                embedder=embedder,
+                reranker=reranker,
+                limit=payload.limit,
+                ef=payload.ef,
+                rrf_k=payload.rrf_k,
+                rerank_top_n=payload.rerank_top_n,
+            )
+
+        searches = []
+        result_sets = []
+        requirement_ids_by_chunk: dict[str, list[str]] = {}
+        for requirement in plan.semantic_requirements:
+            if payload.retrieval_mode == "auto_optimize":
+                outcome = search_with_optimization(requirement, search_query=run_hybrid_search, model=model)
+            else:
+                results = run_hybrid_search(requirement.query)
+                outcome = {"strategy": None, "queries": [requirement.query], "results": results}
+            result_sets.append(outcome["results"])
+            for item in outcome["results"]:
+                requirement_ids_by_chunk.setdefault(item.chunk_id, []).append(requirement.requirement_id)
+            searches.append(
+                {
+                    "requirement_id": requirement.requirement_id,
+                    "strategy": outcome["strategy"],
+                    "queries": outcome["queries"],
+                    "chunk_count": len(outcome["results"]),
+                }
+            )
+
+        chunks = [
+            {
+                "chunk_id": item.chunk_id,
+                "candidate_id": item.candidate_id,
+                "content": item.content,
+                "score": item.rerank_score,
+                "metadata": item.metadata,
+                "requirement_ids": requirement_ids_by_chunk[item.chunk_id],
+            }
+            for item in merge_query_results(result_sets)
+        ]
+        return {
+            "query_plan": plan,
+            "candidate_ids": candidate_ids,
+            "searches": searches,
+            "chunks": chunks,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("talent_search_failed tenant_id=%s", x_tenant_id)
+        raise HTTPException(503, f"人才检索失败: {exc}") from exc
 
 
 @router.post("/jobs/{job_id}/retry")

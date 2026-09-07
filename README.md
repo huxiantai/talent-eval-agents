@@ -30,7 +30,7 @@
 1. 启动基础设施
 
 ```bash
-docker compose -p talent-eval-agents-course up -d postgres redis minio
+docker compose -p talent-eval-agents-course up -d
 ```
 
 2. 启动 MinerU 本地服务
@@ -106,7 +106,20 @@ docker compose -p talent-eval-agents-course --profile app up -d --build
 | `POST /api/documents/{id}/evidence-index` | 为当前文档版本手动创建异步 Milvus 索引任务 |
 | `POST /api/evidence/search` | 按租户、权限范围和业务条件检索人才证据，并返回来源材料与候选人上下文（纯向量） |
 | `POST /api/evidence/hybrid-search` | 稠密 + BM25 双路召回、RRF 融合、Rerank 精排的证据检索 |
+| `POST /api/talent-search/plan` | 把自然语言人才需求编译为受控 Query Plan |
+| `POST /api/talent-search/candidates` | 校验 Query Plan，并用确定性 SQL Builder 返回候选人编号集合 |
+| `POST /api/talent-search` | 输入自然语言查询，依次执行 Query Plan、SQL 候选筛选、混合检索和可选查询优化，返回 Chunk 列表 |
 | `POST /api/index-jobs/{id}/retry` | 为失败的 Milvus 索引任务创建新的幂等重试任务 |
+
+## 第 8 课复合人才检索
+
+| 路径 | 用途 |
+|---|---|
+| `backend/app/query_plan.py` | Query Plan、Filter DSL 注册表、自然语言结构化输出、SQLAlchemy 查询构造与查询优化计划 |
+| `backend/tests/test_query_plan.py` | DSL 提示词、字段白名单、参数化 SQL、年龄边界、待澄清条件、空候选集和优化策略测试 |
+| `backend/tests/test_talent_search_api.py` | 从 HTTP 请求到 Chunk 响应的端到端接口测试，覆盖标准检索与首轮为空后的自动优化检索 |
+
+查询计划把结构化硬条件、语义条件、偏好和待澄清条件分开。Pydantic Schema 提供输出结构，`FILTER_FIELD_REGISTRY` 同时维护字段说明、允许操作符和 SQL 构造函数，并生成提示词中的 Filter DSL。租户从请求头注入，模型不能生成权限条件或原始 SQL。`/talent-search/candidates` 返回 `employee_no` 作为后续 Milvus 检索的 `candidate_ids`。`execute_composite_search()` 在候选集为空时直接结束，不调用 Milvus，避免空列表退化为全库搜索；多个语义要求按 `requirement_id` 分别保存证据。`search_with_optimization()` 在首轮无有效命中时选择 Rewrite、Multi Query 或 Decompose，生成最多 3 条受约束查询，再次检索并按 `chunk_id` 去重合并
 
 ## Chunk 模块
 
