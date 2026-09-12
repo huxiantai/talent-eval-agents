@@ -4,7 +4,8 @@ from fastapi import HTTPException
 from app.models import Document, DocumentVersion, DocumentChunk, ChunkingRun, ParseJob, KnowledgeBase
 
 
-def resolve_citation(db, chunk_id: UUID, *, tenant_id: str, permission_scopes: list[str]):
+def resolve_citation(db, chunk_id: UUID, *, tenant_id: str, permission_scopes: list[str],
+        quote_start: int | None = None, quote_end: int | None = None):
     def unavailable():
         raise HTTPException(404, '引用不可用或无访问权限')
     chunk = db.get(DocumentChunk, chunk_id)
@@ -26,6 +27,9 @@ def resolve_citation(db, chunk_id: UUID, *, tenant_id: str, permission_scopes: l
             unavailable()
     run = db.get(ChunkingRun, chunk.chunking_run_id)
     job = db.get(ParseJob, run.parse_job_id) if run else None
+    if ((quote_start is None) != (quote_end is None)
+            or (quote_start is not None and not (0 <= quote_start < quote_end <= len(chunk.content)))):
+        raise HTTPException(422, '引用位置无效')
     return {
         'citation_id': str(chunk.id), 'chunk_id': str(chunk.id),
         'candidate_id': doc.candidate_id, 'document_id': str(doc.id),
@@ -35,6 +39,7 @@ def resolve_citation(db, chunk_id: UUID, *, tenant_id: str, permission_scopes: l
         'permission_scope': doc.permission_scope, 'content': chunk.content,
         'heading_path': chunk.heading_path, 'markdown_start': chunk.markdown_start,
         'markdown_end': chunk.markdown_end, 'source_locators': chunk.source_locators,
+        'quote_start': quote_start, 'quote_end': quote_end,
         'page_start': chunk.page_start, 'page_end': chunk.page_end,
         'timestamp_start': chunk.timestamp_start, 'timestamp_end': chunk.timestamp_end,
         'parser_version': job.parser_version if job else None,

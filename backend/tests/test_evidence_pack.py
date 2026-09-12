@@ -47,6 +47,13 @@ def test_same_fact_merges_sources_without_dropping_provenance():
     assert len(requirement['facts'][0]['sources']) == 2
 
 
+def test_verified_quote_includes_offsets_from_chunk_content():
+    reference = build()[0]['requirements'][0]['facts'][0]['sources'][0]
+    assert reference['quote'] == '负责星河项目'
+    assert reference['quote_start'] == 0
+    assert reference['quote_end'] == 6
+
+
 @pytest.mark.parametrize('bad', ['unknown_id', 'fabricated_quote'])
 def test_unverifiable_model_output_falls_back_to_raw_citations(bad):
     data = extraction()

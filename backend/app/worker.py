@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 def run() -> None:
     settings = get_settings()
-    configure_logging(settings.log_dir, settings.service_name)
+    configure_logging(settings.log_dir, "worker")
     redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_timeout=15)
     queues = ["talent:parse:queue", "talent:index:queue"]
     logger.info("worker_started queues=%s", ",".join(queues))

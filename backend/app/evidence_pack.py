@@ -65,9 +65,16 @@ def _validate_fact_sources(facts, sources):
         refs = []
         for ref in fact.sources:
             row = by_id.get(ref.chunk_id)
-            if row is None or not ref.quote.strip() or ref.quote not in row['content']:
+            quote_start = row['content'].find(ref.quote) if row is not None else -1
+            if row is None or not ref.quote.strip() or quote_start < 0:
                 raise ValueError('unverifiable_source')
-            mapped = {'citation_id': row['citation_id'], 'chunk_id': ref.chunk_id, 'quote': ref.quote}
+            mapped = {
+                'citation_id': row['citation_id'],
+                'chunk_id': ref.chunk_id,
+                'quote': ref.quote,
+                'quote_start': quote_start,
+                'quote_end': quote_start + len(ref.quote),
+            }
             if mapped not in refs:
                 refs.append(mapped)
         validated.append({**fact.model_dump(exclude={'sources'}), 'sources': refs})

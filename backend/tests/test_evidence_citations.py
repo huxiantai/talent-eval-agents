@@ -88,6 +88,44 @@ def test_citation_endpoint_rechecks_access():
     assert chunk.content not in response.text
 
 
+def test_citation_endpoint_returns_validated_quote_offsets():
+    from app.main import create_app
+    from app.database import get_db
+    from fastapi.testclient import TestClient
+    db, kb, doc, version, chunk = fixture()
+    app = create_app()
+    app.dependency_overrides[get_db] = lambda: db
+    response = TestClient(app).get(
+        f'/api/evidence/citations/{chunk.id}?quote_start=0&quote_end=6',
+        headers={'X-Tenant-ID': 't1', 'X-Permission-Scopes': 'hr_private'},
+    )
+    assert response.status_code == 200
+    assert response.json()['quote_start'] == 0
+    assert response.json()['quote_end'] == 6
+    assert response.json()['content'][0:6] == '负责星河项目'
+
+
+@pytest.mark.parametrize('query', [
+    'quote_start=0',
+    'quote_end=6',
+    'quote_start=-1&quote_end=6',
+    'quote_start=6&quote_end=6',
+    'quote_start=0&quote_end=99',
+])
+def test_citation_endpoint_rejects_invalid_quote_offsets(query):
+    from app.main import create_app
+    from app.database import get_db
+    from fastapi.testclient import TestClient
+    db, kb, doc, version, chunk = fixture()
+    app = create_app()
+    app.dependency_overrides[get_db] = lambda: db
+    response = TestClient(app).get(
+        f'/api/evidence/citations/{chunk.id}?{query}',
+        headers={'X-Tenant-ID': 't1', 'X-Permission-Scopes': 'hr_private'},
+    )
+    assert response.status_code == 422
+
+
 def test_pack_sources_reload_text_and_skip_stale_or_revoked_hits():
     from app.evidence_citations import load_pack_sources
     db, kb, doc, version, chunk = fixture()

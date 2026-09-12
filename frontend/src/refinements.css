@@ -570,3 +570,5 @@ main {
 .evidencePackPanel .recallCard { margin: 12px 0; padding: 16px; }
 .evidencePackPanel button { white-space: normal; text-align: left; margin: 4px; }
 .evidencePackPanel .drawer { padding: 24px; overflow-y: auto; }
+.evidencePackPanel .citationText { white-space: pre-wrap; overflow-wrap: anywhere; }
+.evidencePackPanel .citationText mark { padding: 1px 2px; border-radius: 3px; background: #ffe58f; color: inherit; }

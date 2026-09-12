@@ -725,6 +725,8 @@ def list_artifacts(job_id: UUID, db: Session = Depends(get_db)):
 
 @router.get("/evidence/citations/{chunk_id}")
 def get_evidence_citation(chunk_id: UUID, x_tenant_id: str = Header(...),
-    x_permission_scopes: str = Header(...), db: Session = Depends(get_db)):
+    x_permission_scopes: str = Header(...), quote_start: int | None = None,
+    quote_end: int | None = None, db: Session = Depends(get_db)):
     return resolve_citation(db, chunk_id, tenant_id=x_tenant_id,
-        permission_scopes=[s.strip() for s in x_permission_scopes.split(",") if s.strip()])
+        permission_scopes=[s.strip() for s in x_permission_scopes.split(",") if s.strip()],
+        quote_start=quote_start, quote_end=quote_end)

@@ -132,9 +132,9 @@ docker compose -p talent-eval-agents-course --profile app up -d --build
 | `backend/scripts/verify_evidence_pack.py` | 以隔离合成材料验证查询、事实合并、冲突输出和材料缺失 |
 | `backend/samples/lesson09/` | C901、C902 虚构材料及数据性质说明 |
 
-证据包协议版本为 `2.0`。事实字段为 `event`、`period`、`claim`、`answer` 和 `sources`，其中 `answer` 只允许 yes 或 no。模型只抽取事实，程序校验来源后按 `event + period + claim + answer` 合并重复事实，再根据同一 `event + period + claim` 下的 yes/no 推导冲突。证据状态分为 `sufficient`、`partial`、`missing` 和 `conflicting`
+证据包协议版本为 `2.0`。事实字段为 `event`、`period`、`claim`、`answer` 和 `sources`，其中 `answer` 只允许 yes 或 no。每个 source 包含 `citation_id`、`chunk_id`、`quote`、`quote_start` 和 `quote_end`，坐标是 Chunk 文本内的半开区间 `[quote_start, quote_end)`。模型只抽取事实，程序校验来源后按 `event + period + claim + answer` 合并重复事实，再根据同一 `event + period + claim` 下的 yes/no 推导冲突。证据状态分为 `sufficient`、`partial`、`missing` 和 `conflicting`
 
-模型返回的每条来源必须引用输入中的 `chunk_id`，`quote` 必须是对应 Chunk 的连续原文。校验失败时，系统返回 `partial + extraction_failed`，保留原始引用，不返回未经核验的事实
+模型返回的每条来源必须引用输入中的 `chunk_id`，`quote` 必须是对应 Chunk 的连续原文。`quote_start` 和 `quote_end` 由后端在校验通过后根据 PostgreSQL 重读的 Chunk 计算，不接受模型生成的位置。校验失败时，系统返回 `partial + extraction_failed`，保留原始引用，不返回未经核验的事实
 
 隔离演示默认使用内存 SQLite、固定检索结果和固定抽取结果，不读取现有员工数据库或 Milvus
 
@@ -157,7 +157,7 @@ uv run --no-sync python -m scripts.verify_evidence_pack --live-model
 | `backend/tests/test_evidence_citations.py` | 版本绑定、租户与权限检查、历史版本和引用接口测试 |
 | `frontend/src/EvidencePackPanel.tsx` | 展示证据状态、事实来源、待核查冲突与引用原文抽屉 |
 
-引用接口为 `GET /api/evidence/citations/{chunk_id}`。接口根据当前请求上下文重新检查 Chunk、材料版本、文档、资料库、候选人、租户和权限范围。历史版本仍可访问时返回 `version_state=historical`，权限撤销或材料不可用时统一返回 404
+引用接口为 `GET /api/evidence/citations/{chunk_id}?quote_start={start}&quote_end={end}`。事实来源打开引用时同时传递 quote 坐标；未指定坐标时仍可查看整个 Chunk。接口校验坐标成对出现且不超出 Chunk，并根据当前请求上下文重新检查 Chunk、材料版本、文档、资料库、候选人、租户和权限范围。历史版本仍可访问时返回 `version_state=historical`，权限撤销或材料不可用时统一返回 404。前端抽屉展示 `heading_path`、Chunk 起止位置和 quote 起止位置，并在完整 Chunk 中高亮 quote
 
 第 10 课把当前界面定位为档案知识库中的检索验收台。正式的人才评估与推荐 Chat 页面留到后续课程接入 LangGraph、SSE 和会话状态
 
@@ -176,7 +176,7 @@ uv run --no-sync pytest -q \
 结果输出：
 
 ```text
-36 passed, 3 warnings
+43 passed, 3 warnings
 ```
 
 结果说明：这组测试使用数据库、Milvus 和模型替身，只用于代码分支回归，不能替代开发模式联调
