@@ -16,6 +16,7 @@ import {
   UserSquare2,
   X,
 } from "lucide-react";
+import { EvidencePackPanel } from "./EvidencePackPanel";
 import "./style.css";
 import "./refinements.css";
 
@@ -432,6 +433,7 @@ function RecallLab({
 
   return (
     <section className="recallLab">
+      <EvidencePackPanel api={API} tenant={TENANT_ID} />
       <div className="recallHead">
         <div>
           <h3>证据召回测试</h3>

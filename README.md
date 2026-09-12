@@ -121,6 +121,96 @@ docker compose -p talent-eval-agents-course --profile app up -d --build
 
 查询计划把结构化硬条件、语义条件、偏好和待澄清条件分开。Pydantic Schema 提供输出结构，`FILTER_FIELD_REGISTRY` 同时维护字段说明、允许操作符和 SQL 构造函数，并生成提示词中的 Filter DSL。租户从请求头注入，模型不能生成权限条件或原始 SQL。`/talent-search/candidates` 返回 `employee_no` 作为后续 Milvus 检索的 `candidate_ids`。`execute_composite_search()` 在候选集为空时直接结束，不调用 Milvus，避免空列表退化为全库搜索；多个语义要求按 `requirement_id` 分别保存证据。`search_with_optimization()` 在首轮无有效命中时选择 Rewrite、Multi Query 或 Decompose，生成最多 3 条受约束查询，再次检索并按 `chunk_id` 去重合并
 
+## 第 9 课可信证据输出
+
+`POST /api/talent-search` 增加可选参数 `include_evidence_pack`。默认值为 `false`，原有调用继续返回 Query Plan、候选集、检索记录和 Chunk 列表。参数设为 `true` 时，接口从 PostgreSQL 重新读取并鉴权检索命中的 Chunk，再按候选人和 `requirement_id` 输出 `Candidate Evidence Pack`
+
+| 路径 | 用途 |
+|---|---|
+| `backend/app/evidence_pack.py` | Pydantic 抽取协议、事实来源校验、重复事实合并、yes/no 冲突推导和证据状态计算 |
+| `backend/tests/test_evidence_pack.py` | Chunk 去重、来源合并、伪造引用拦截、冲突范围、时间格式和失败降级测试 |
+| `backend/scripts/verify_evidence_pack.py` | 以隔离合成材料验证查询、事实合并、冲突输出和材料缺失 |
+| `backend/samples/lesson09/` | C901、C902 虚构材料及数据性质说明 |
+
+证据包协议版本为 `2.0`。事实字段为 `event`、`period`、`claim`、`answer` 和 `sources`，其中 `answer` 只允许 yes 或 no。模型只抽取事实，程序校验来源后按 `event + period + claim + answer` 合并重复事实，再根据同一 `event + period + claim` 下的 yes/no 推导冲突。证据状态分为 `sufficient`、`partial`、`missing` 和 `conflicting`
+
+模型返回的每条来源必须引用输入中的 `chunk_id`，`quote` 必须是对应 Chunk 的连续原文。校验失败时，系统返回 `partial + extraction_failed`，保留原始引用，不返回未经核验的事实
+
+隔离演示默认使用内存 SQLite、固定检索结果和固定抽取结果，不读取现有员工数据库或 Milvus
+
+```bash
+cd backend
+uv run --no-sync python -m scripts.verify_evidence_pack
+```
+
+使用项目配置的模型验证时，只有 `backend/samples/lesson09/` 下明确标注为虚构的三份材料会发送到模型 API
+
+```bash
+uv run --no-sync python -m scripts.verify_evidence_pack --live-model
+```
+
+## 第 10 课检索链路与引用展示
+
+| 路径 | 用途 |
+|---|---|
+| `backend/app/evidence_citations.py` | 从 PostgreSQL 重读 Chunk、绑定材料版本并按当前租户和权限解析引用 |
+| `backend/tests/test_evidence_citations.py` | 版本绑定、租户与权限检查、历史版本和引用接口测试 |
+| `frontend/src/EvidencePackPanel.tsx` | 展示证据状态、事实来源、待核查冲突与引用原文抽屉 |
+
+引用接口为 `GET /api/evidence/citations/{chunk_id}`。接口根据当前请求上下文重新检查 Chunk、材料版本、文档、资料库、候选人、租户和权限范围。历史版本仍可访问时返回 `version_state=historical`，权限撤销或材料不可用时统一返回 404
+
+第 10 课把当前界面定位为档案知识库中的检索验收台。正式的人才评估与推荐 Chat 页面留到后续课程接入 LangGraph、SSE 和会话状态
+
+第 10 课相关回归命令：
+
+```bash
+cd backend
+uv run --no-sync pytest -q \
+  tests/test_query_plan.py \
+  tests/test_hybrid_search_service.py \
+  tests/test_talent_search_api.py \
+  tests/test_evidence_pack.py \
+  tests/test_evidence_citations.py
+```
+
+结果输出：
+
+```text
+36 passed, 3 warnings
+```
+
+结果说明：这组测试使用数据库、Milvus 和模型替身，只用于代码分支回归，不能替代开发模式联调
+
+第 10 课开发模式联调沿用 Compose 中已经启动的 PostgreSQL、Redis、MinIO、Milvus 和 etcd，并分别启动本地 backend、worker 和 frontend
+
+运行材料导入脚本：
+
+```bash
+cd backend
+uv run python scripts/import_markdown_reviews.py
+```
+
+结果输出：
+
+```text
+C001  C001_林晓岚_项目复盘  chunk=markdown  index=succeeded
+C002  C002_陈泽宇_项目复盘  chunk=markdown  index=succeeded
+C003  C003_周雨桐_项目复盘  chunk=markdown  index=succeeded
+C004  C004_赵明远_项目复盘  chunk=markdown  index=succeeded
+C005  C005_郭思远_项目复盘  chunk=markdown  index=succeeded
+```
+
+结果说明：
+
+- PostgreSQL 新增 5 份材料，每份 20 个 Parent/Child Chunk，共 100 个 Chunk
+- Milvus `talent_evidence_v2` 写入 50 个可召回 Child Chunk，每名候选人 10 个
+- 查询 `筛选在上海且有企业知识库和大模型应用项目经验的候选人` 生成地区过滤和 1 项语义要求
+- 浏览器返回 C001 的 `sufficient` 状态、5 条事实和 16 条原始证据
+- 引用抽屉返回当前版本、标题路径、Markdown 起始位置和 PostgreSQL 原文
+- 使用 `company_internal` 权限读取同一 `hr_private` 引用返回 `404`
+
+模型抽取结果具有不确定性。同一材料的另一轮请求返回 `partial`，并把缺失项目时间记录为 `period`。演示和评测需要保留每次运行输出，不能把一次输出写成固定结果
+
 ## Chunk 模块
 
 | 路径 | 用途 |
@@ -224,7 +314,7 @@ cd backend
 uv run python -m scripts.verify_milvus
 ```
 
-验收脚本的实际运行结果
+验收脚本输出
 
 ```json
 {"collection": "lesson6_verification_v1", "upserted": 2, "matched": 1, "top_candidate": "C001", "top_score": 1.0, "permission_scope": "hr_private"}
@@ -281,7 +371,7 @@ uv run pytest tests -q
 
 当前回归结果以本次本地 `pytest` 结果为准
 
-当前本地结果：`82 passed, 2 warnings`
+结果输出：`121 passed, 3 warnings`
 
 ## 服务日志
 

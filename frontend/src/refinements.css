@@ -564,3 +564,9 @@ main {
     min-width: 1180px
   }
 }
+
+.evidencePackPanel { margin-bottom: 20px; padding: 16px; border: 1px solid #dce5ed; border-radius: 12px; }
+.evidencePackPanel summary { cursor: pointer; margin-bottom: 12px; font-weight: 600; }
+.evidencePackPanel .recallCard { margin: 12px 0; padding: 16px; }
+.evidencePackPanel button { white-space: normal; text-align: left; margin: 4px; }
+.evidencePackPanel .drawer { padding: 24px; overflow-y: auto; }

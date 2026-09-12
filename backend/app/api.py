@@ -18,6 +18,8 @@ from app.database import get_db
 from app.document_cleanup import delete_document_bundle
 from app.document_pipeline import queue_index_job, queue_parse_job, summarize_pipeline_status
 from app.evidence_index_service import get_evidence_store
+from app.evidence_citations import load_pack_sources, resolve_citation
+from app.evidence_pack import build_evidence_packs, model_extractor
 from app.hybrid_search_service import hybrid_search_evidence as hybrid_search_evidence_service
 from app.milvus_store import EvidenceFilter
 from app.model_provider import get_embedding_model
@@ -89,6 +91,7 @@ class QueryPlanInput(BaseModel):
 
 
 class TalentSearchInput(BaseModel):
+    include_evidence_pack: bool = False
     query: str = Field(min_length=1, max_length=2000)
     retrieval_mode: Literal["standard", "auto_optimize"] = "standard"
     limit: int = Field(default=10, ge=1, le=100)
@@ -592,7 +595,8 @@ def search_talent(
             )
         candidate_ids = select_candidate_ids(db, plan, tenant_id=x_tenant_id)
         if not candidate_ids:
-            return {"query_plan": plan, "candidate_ids": [], "searches": [], "chunks": []}
+            return {"query_plan": plan, "candidate_ids": [], "searches": [], "chunks": [],
+                    **({"evidence_packs": [], "evidence_status": "no_candidates"} if payload.include_evidence_pack else {})}
 
         store = get_evidence_store()
 
@@ -645,12 +649,25 @@ def search_talent(
             }
             for item in merge_query_results(result_sets)
         ]
-        return {
+        response = {
             "query_plan": plan,
             "candidate_ids": candidate_ids,
             "searches": searches,
             "chunks": chunks,
         }
+        if payload.include_evidence_pack:
+            sources = load_pack_sources(db, chunks, tenant_id=x_tenant_id,
+                permission_scopes=permission_scopes)
+            # Do not return stale/unauthorized index text alongside the validated pack.
+            source_by_id = {row["chunk_id"]: row for row in sources}
+            response["chunks"] = [dict(hit, content=source_by_id[hit["chunk_id"]]["content"])
+                for hit in chunks if hit["chunk_id"] in source_by_id]
+            response["evidence_packs"] = build_evidence_packs(
+                candidate_ids=candidate_ids,
+                requirements=[r.model_dump() for r in plan.semantic_requirements],
+                sources=sources, extract=model_extractor(model))
+            response["evidence_status"] = "reviewed" if plan.semantic_requirements else "not_requested"
+        return response
     except HTTPException:
         raise
     except Exception as exc:
@@ -704,3 +721,10 @@ def list_artifacts(job_id: UUID, db: Session = Depends(get_db)):
     items = db.scalars(select(ParseArtifact).where(ParseArtifact.parse_job_id == job_id)).all()
     store = ObjectStore()
     return [{"id": item.id, "type": item.artifact_type, "content_type": item.content_type, "url": store.presigned_get(item.object_key)} for item in items]
+
+
+@router.get("/evidence/citations/{chunk_id}")
+def get_evidence_citation(chunk_id: UUID, x_tenant_id: str = Header(...),
+    x_permission_scopes: str = Header(...), db: Session = Depends(get_db)):
+    return resolve_citation(db, chunk_id, tenant_id=x_tenant_id,
+        permission_scopes=[s.strip() for s in x_permission_scopes.split(",") if s.strip()])

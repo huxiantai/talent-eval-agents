@@ -186,3 +186,31 @@ def test_talent_search_endpoint_retries_with_optimized_queries_when_first_search
         }
     ]
     assert [item["chunk_id"] for item in body["chunks"]] == ["chunk-optimized"]
+
+
+def test_opt_in_evidence_pack_keeps_existing_chunks(monkeypatch):
+    from app.evidence_pack import EvidenceExtraction
+    class EvidenceModel:
+        def with_structured_output(self, schema):
+            if schema is EvidenceExtraction:
+                return SimpleNamespace(invoke=lambda _: EvidenceExtraction(
+                    facts=[], fully_supported=False, missing_information=['材料未说明职责']))
+            return FakeStructuredModel(schema)
+    app = create_app()
+    app.dependency_overrides[get_db] = lambda: FakeSession()
+    monkeypatch.setattr(api, 'get_chat_model', lambda temperature=0: EvidenceModel())
+    monkeypatch.setattr(api, 'get_embedding_model', lambda: FakeEmbedder())
+    monkeypatch.setattr(api, 'get_reranker', lambda: FakeReranker())
+    monkeypatch.setattr(api, 'get_evidence_store', lambda: FakeStore())
+    # The API test substitutes storage only; grouping and model-output validation run normally.
+    monkeypatch.setattr(api, 'load_pack_sources', lambda db, rows, **kw: [
+        dict(rows[0], citation_id=rows[0]['chunk_id'])], raising=False)
+    response = TestClient(app).post('/api/talent-search',
+        headers={'X-Tenant-ID': 'course-demo', 'X-Permission-Scopes': 'hr_private'},
+        json={'query': '有 AI 工作经历', 'include_evidence_pack': True})
+    assert response.status_code == 200
+    body = response.json()
+    assert 'evidence_packs' in body
+    assert len(body['chunks']) == 1
+    assert body['evidence_packs'][0]['requirements'][0]['reason'] == 'no_relevant_evidence'
+    assert body['evidence_packs'][1]['requirements'][0]['reason'] == 'no_accessible_hits'
